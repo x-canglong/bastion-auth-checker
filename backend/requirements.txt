@@ -1,0 +1,23 @@
+# FastAPI 核心
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+
+# 数据库
+sqlalchemy==2.0.36
+pymysql==1.1.1
+cryptography==44.0.0
+
+# 配置管理
+python-dotenv>=1.1.0  # 满足 fastmcp 要求（≥1.1.0）
+pydantic[email]>=2.11.7  # 满足 fastmcp/mcp 要求（≥2.11.7）+ 包含 email 额外依赖
+pydantic-settings==2.6.1
+
+# 工具库
+python-multipart==0.0.20
+python-dateutil==2.9.0.post0
+websockets==14.1
+loguru==0.7.3
+
+# Excel处理
+pandas==2.2.3
+openpyxl==3.1.5

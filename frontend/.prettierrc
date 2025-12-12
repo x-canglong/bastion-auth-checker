@@ -1,0 +1,11 @@
+{
+  "eslintIntegration": false,
+  "spaceBeforeFunctionParen": true,
+  "jsxBracketSameLine": true,
+  "tabWidth": 2,
+  "semi": false,
+  "singleQuote": true,
+  "trailingComma": "none",
+  "arrowParens": "always",
+  "printWidth": 80
+}
