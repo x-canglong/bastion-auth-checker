@@ -1,212 +1,297 @@
 <template>
-  <div class="auth-checker">
-    <div class="header">
-      <h1>授权检查工具</h1>
-      <p class="subtitle">自动检查Excel表格中的授权项目，标记不符合常规逻辑的项目</p>
-    </div>
-
-    <div class="content">
-      <!-- 主页面：文件操作 -->
-      <div class="main-panel">
-        <div class="file-section">
-          <div class="file-info">
-            <label>选择的文件:</label>
-            <span class="file-path">{{ selectedFile || '未选择文件' }}</span>
-          </div>
-          <div class="action-buttons">
-            <el-button type="primary" @click="selectFile">选择Excel文件</el-button>
-            <el-button type="success" @click="openConfigDialog">规则配置</el-button>
-            <el-button 
-              type="primary" 
-              @click="processFile" 
-              :disabled="!selectedFile || processing"
-              :loading="processing"
-            >
-              {{ processing ? '处理中...' : '开始检查' }}
-            </el-button>
+  <div class="auth-checker-app">
+    <!-- 顶部导航栏 -->
+    <div class="app-header">
+      <div class="header-content">
+        <div class="logo-section">
+          <el-icon class="logo-icon"><Lock /></el-icon>
+          <div class="logo-text">
+            <h1>堡垒机授权检查工具</h1>
+            <p class="subtitle">自动检查并标记不符合常规逻辑的授权项目</p>
           </div>
         </div>
+        <div class="header-actions">
+          <el-button type="info" :icon="Folder" @click="openHistoryManager">
+            历史文件
+          </el-button>
+          <el-button type="warning" :icon="Document" @click="openLogManager">
+            日志管理
+          </el-button>
+          <el-button type="primary" :icon="Setting" @click="openConfigDialog">
+            规则配置
+          </el-button>
+        </div>
+      </div>
+    </div>
 
-        <!-- 检查结果子页面 -->
-        <div v-if="result" class="result-panel">
-          <el-tabs v-model="activeTab" type="border-card">
-            <!-- 统计信息Tab -->
-            <el-tab-pane label="统计信息" name="summary">
-              <div class="summary">
-                <div class="summary-item">
-                  <span class="label">总工作表数:</span>
-                  <span class="value">{{ result.summary.totalSheets }}</span>
-                </div>
-                <div class="summary-item">
-                  <span class="label">总记录数:</span>
-                  <span class="value">{{ result.summary.totalRecords }}</span>
-                </div>
-                <div class="summary-item highlight">
-                  <span class="label">标记删除数:</span>
-                  <span class="value">{{ result.summary.markedForDeletion }}</span>
+    <!-- 主内容区 -->
+    <div class="app-content">
+      <!-- 文件选择卡片 -->
+      <el-card class="file-card" shadow="hover">
+        <template #header>
+          <div class="card-header">
+            <span class="card-title">
+              <el-icon><FolderOpened /></el-icon>
+              文件选择
+            </span>
+          </div>
+        </template>
+        <div class="file-section">
+          <div class="file-info-wrapper">
+            <div class="file-info">
+              <el-icon class="file-icon"><Document /></el-icon>
+              <div class="file-details">
+                <div class="file-name">{{ selectedFile ? getFileName(selectedFile) : '未选择文件' }}</div>
+                <div class="file-path" v-if="selectedFile">{{ selectedFile }}</div>
+              </div>
+            </div>
+            <div class="action-buttons">
+              <el-button type="primary" :icon="FolderOpened" @click="selectFile" size="large">
+                选择Excel文件
+              </el-button>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <el-button
+                  type="success"
+                  :icon="Search"
+                  @click="processFile"
+                  :disabled="!selectedFile || processing"
+                  :loading="processing"
+                  size="large"
+                >
+                  {{ processing ? (progressMessage || '检查中...') : '开始检查' }}
+                </el-button>
+                <el-progress
+                  v-if="processing"
+                  :percentage="progressPercentage"
+                  :status="progressPercentage === 100 ? 'success' : undefined"
+                  :stroke-width="6"
+                  style="width: 200px"
+                />
+              </div>
+              <el-button
+                type="success"
+                :icon="Download"
+                @click="saveResult"
+                :disabled="!result || !cacheKey"
+                size="large"
+              >
+                导出Excel
+              </el-button>
+            </div>
+          </div>
+        </div>
+      </el-card>
+
+      <!-- 检查结果 -->
+      <div v-if="result && !processing" class="result-section">
+        <!-- 统计信息卡片 -->
+        <el-card class="summary-card" shadow="hover">
+          <template #header>
+            <div class="card-header">
+              <span class="card-title">
+                <el-icon><DataAnalysis /></el-icon>
+                检查统计
+              </span>
+            </div>
+          </template>
+          <div class="summary-grid">
+            <div class="summary-item">
+              <div class="summary-icon total">
+                <el-icon><Files /></el-icon>
+              </div>
+              <div class="summary-content">
+                <div class="summary-label">总工作表数</div>
+                <div class="summary-value">{{ result.summary.totalSheets }}</div>
+              </div>
+            </div>
+            <div class="summary-item">
+              <div class="summary-icon records">
+                <el-icon><Document /></el-icon>
+              </div>
+              <div class="summary-content">
+                <div class="summary-label">总记录数</div>
+                <div class="summary-value">{{ result.summary.totalRecords }}</div>
+              </div>
+            </div>
+            <div class="summary-item highlight">
+              <div class="summary-icon danger">
+                <el-icon><Warning /></el-icon>
+              </div>
+              <div class="summary-content">
+                <div class="summary-label">标记删除数</div>
+                <div class="summary-value danger-text">{{ result.summary.markedForDeletion }}</div>
+              </div>
+            </div>
+            <div class="summary-item">
+              <div class="summary-icon success">
+                <el-icon><CircleCheck /></el-icon>
+              </div>
+              <div class="summary-content">
+                <div class="summary-label">正常记录数</div>
+                <div class="summary-value success-text">
+                  {{ result.summary.totalRecords - result.summary.markedForDeletion }}
                 </div>
               </div>
+            </div>
+          </div>
 
-              <div v-if="Object.keys(result.summary.byReason).length > 0" class="reason-breakdown">
-                <h3>删除原因统计:</h3>
-                <ul>
-                  <li v-for="(count, reason) in result.summary.byReason" :key="reason">
-                    {{ reason }}: {{ count }} 条
-                  </li>
-                </ul>
+          <!-- 删除原因统计 -->
+          <div v-if="Object.keys(result.summary.byReason).length > 0" class="reason-breakdown">
+            <h3 class="breakdown-title">
+              <el-icon><List /></el-icon>
+              删除原因统计
+            </h3>
+            <div class="reason-tags">
+              <el-tag
+                v-for="(count, reason) in result.summary.byReason"
+                :key="reason"
+                type="danger"
+                size="large"
+                class="reason-tag"
+              >
+                {{ reason }}: {{ count }} 条
+              </el-tag>
+            </div>
+          </div>
+        </el-card>
+
+        <!-- 预览卡片 -->
+        <el-card class="preview-card" shadow="hover">
+          <template #header>
+            <div class="card-header">
+              <span class="card-title">
+                <el-icon><View /></el-icon>
+                检查预览
+              </span>
+              <div class="table-info">
+                共 {{ currentTableData.length }} 条记录
               </div>
-            </el-tab-pane>
-
-            <!-- 预览Tab（按sheet分组） -->
-            <el-tab-pane label="预览" name="preview">
               <div class="preview-controls">
-                <el-radio-group v-model="previewFilter" size="small">
-                  <el-radio-button label="all">全部记录</el-radio-button>
-                  <el-radio-button label="marked">仅标记删除</el-radio-button>
+                <el-radio-group v-model="previewFilter" size="default">
+                  <el-radio-button label="all">
+                    <el-icon><List /></el-icon>
+                    全部记录
+                  </el-radio-button>
+                  <el-radio-button label="marked">
+                    <el-icon><Warning /></el-icon>
+                    仅标记删除
+                  </el-radio-button>
                 </el-radio-group>
               </div>
-              <el-tabs v-model="activeSheetTab" type="card" v-if="result.preview && Object.keys(result.preview).length > 0">
-                <el-tab-pane 
-                  v-for="(records, sheetName) in result.preview" 
-                  :key="sheetName"
-                  :label="`${sheetName} (${getFilteredRecords(records).length}/${records.length}条)`"
-                  :name="sheetName"
-                >
-                  <div class="table-container">
-                    <el-table 
-                      :data="getFilteredRecords(records)" 
-                      stripe
-                      border
-                      style="width: 100%"
-                      max-height="600"
-                      :row-class-name="getRowClassName"
-                    >
-                      <el-table-column prop="主机IP" label="主机IP" width="150" />
-                      <el-table-column prop="主机名称" label="主机名称" width="200" />
-                      <el-table-column prop="协议" label="协议" width="100" />
-                      <el-table-column prop="账户登录名" label="账户登录名" width="150" />
-                      <el-table-column prop="删除原因" label="删除原因" width="250" />
-                      <el-table-column label="删除标记" width="120" fixed="right">
-                        <template #default="scope">
-                          <el-switch
-                            v-model="scope.row.shouldDelete"
-                            active-text="删除"
-                            inactive-text="保留"
-                            @change="handleDeleteMarkChange(scope.row)"
-                          />
-                        </template>
-                      </el-table-column>
-                    </el-table>
-                  </div>
-                </el-tab-pane>
-              </el-tabs>
-              <div v-else class="empty-preview">
-                <p>暂无记录</p>
-              </div>
+            </div>
+          </template>
+
+          <!-- 工作表Tabs -->
+          <el-tabs v-model="activeSheetTab" type="border-card" v-if="result.preview && Object.keys(result.preview).length > 0">
+            <el-tab-pane
+              v-for="(records, sheetName) in result.preview"
+              :key="sheetName"
+              :label="`${sheetName} (${getFilteredRecords(records).length}/${records.length})`"
+              :name="sheetName"
+            >
+              <!-- Tabs内容为空 -->
             </el-tab-pane>
           </el-tabs>
-
-          <div class="save-section">
-            <el-button type="success" size="large" @click="saveResult">
-              保存结果到Excel文件
-            </el-button>
+          <div class="table-container" v-loading="updating">
+            <el-table-v2
+              :columns="tableColumns"
+              :data="currentTableData"
+              :width="1400"
+              :height="600"
+              fixed
+              :row-class="getRowClassName"
+            />
           </div>
-        </div>
-
-        <!-- 错误提示 -->
-        <el-alert
-          v-if="error"
-          :title="error"
-          type="error"
-          :closable="true"
-          @close="error = ''"
-          style="margin-top: 20px"
-        />
+          <!-- <div v-else class="empty-preview">
+            <el-empty description="暂无记录" />
+          </div> -->
+        </el-card>
       </div>
+
+      <!-- 数据表格 -->
+      <!-- <el-card v-if="result && currentTableData.length > 0" class="table-card" shadow="hover">
+        <template #header>
+          <div class="card-header">
+            <span class="card-title">
+              <el-icon><List /></el-icon>
+              数据详情
+            </span>
+            <div class="table-info">
+              共 {{ currentTableData.length }} 条记录
+            </div>
+          </div>
+        </template>
+        <div class="table-container" v-loading="updating">
+          <el-table-v2
+            :columns="tableColumns"
+            :data="currentTableData"
+            :width="1400"
+            :height="600"
+            fixed
+            :row-class="getRowClassName"
+          />
+        </div>
+      </el-card> -->
+
+      <!-- 错误提示 -->
+      <el-alert
+        v-if="error"
+        :title="error"
+        type="error"
+        :closable="true"
+        @close="error = ''"
+        show-icon
+        class="error-alert"
+      />
     </div>
 
-    <!-- 规则配置弹框 -->
-    <el-dialog
+    <!-- 规则配置对话框 -->
+    <ConfigDialog
       v-model="configDialogVisible"
-      title="检查规则配置"
-      width="800px"
-      :close-on-click-modal="false"
-    >
-      <div class="config-content">
-        <div class="config-section">
-          <label>运维岗位人员名单（每行一个，支持部分匹配）:</label>
-          <el-input
-            v-model="config.opsPersonnelText"
-            type="textarea"
-            :rows="5"
-            placeholder="例如：&#10;王礼鑫&#10;王鹏辉&#10;杨志智&#10;张涛"
-          />
-        </div>
+      :config="config"
+      @save="handleConfigSave"
+      @load="handleConfigLoad"
+    />
 
-        <div class="config-section">
-          <label>生产环境主机名称规则（每行一个，支持正则表达式）:</label>
-          <el-input
-            v-model="config.productionHostPatternsText"
-            type="textarea"
-            :rows="5"
-            placeholder="例如：&#10;prd&#10;pehx-outpub-"
-          />
-        </div>
-
-        <div class="config-section">
-          <label>生产环境主机名称排除规则（每行一个，不匹配这些规则）:</label>
-          <el-input
-            v-model="config.productionHostExcludePatternsText"
-            type="textarea"
-            :rows="3"
-            placeholder="例如：&#10;uat"
-          />
-        </div>
-
-        <div class="config-section">
-          <label>主数据库IP地址列表（每行一个）:</label>
-          <el-input
-            v-model="config.masterDbIPsText"
-            type="textarea"
-            :rows="5"
-            placeholder="例如：&#10;192.168.240.181&#10;192.168.240.156"
-          />
-        </div>
-
-        <div class="config-section">
-          <label>主数据库IP地址范围:</label>
-          <div class="ip-range">
-            <el-input v-model="config.masterDbIPRange.start" placeholder="起始IP" />
-            <span> - </span>
-            <el-input v-model="config.masterDbIPRange.end" placeholder="结束IP" />
-          </div>
-        </div>
-      </div>
-
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button @click="loadConfig">加载配置</el-button>
-          <el-button @click="saveConfig">保存配置</el-button>
-          <el-button type="primary" @click="configDialogVisible = false">确定</el-button>
-        </div>
-      </template>
-    </el-dialog>
+    <!-- 历史文件管理对话框 -->
+    <HistoryManager v-model="historyManagerVisible" />
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed, h } from 'vue'
 import { ElMessage } from 'element-plus'
+import { ElTag, ElSwitch } from 'element-plus'
+
+const emit = defineEmits(['open-history-manager', 'open-log-manager'])
+import {
+  Lock,
+  Setting,
+  FolderOpened,
+  Document,
+  Search,
+  DataAnalysis,
+  Files,
+  Warning,
+  CircleCheck,
+  List,
+  View,
+  Download,
+  Folder
+} from '@element-plus/icons-vue'
+import ConfigDialog from './components/ConfigDialog.vue'
 
 const selectedFile = ref('')
 const processing = ref(false)
+const updating = ref(false)
 const result = ref(null)
 const error = ref('')
 const configDialogVisible = ref(false)
-const activeTab = ref('summary')
 const activeSheetTab = ref('')
 const cacheKey = ref('')
 const previewFilter = ref('marked')
+const progressMessage = ref('')
+const progressPercentage = ref(0)
 
 const config = reactive({
   opsPersonnelText: '王礼鑫\n王鹏辉\n杨志智\n张涛',
@@ -216,24 +301,43 @@ const config = reactive({
   masterDbIPRange: {
     start: '192.168.240.150',
     end: '192.168.240.190'
-  }
+  },
+  duplicateFields: ['主机IP', '主机名称', '主机网络', '主机组', '协议', '账户登录名'],
+  longTimeDays: 30,
+  maxHistoryFiles: 50
 })
 
-// 将配置文本转换为数组
+const getFileName = (filePath) => {
+  return filePath.split(/[/\\]/).pop()
+}
+
 const getConfigObject = () => {
+  // 确保返回完全可序列化的对象
   return {
-    opsPersonnel: config.opsPersonnelText.split('\n').filter(s => s.trim()),
-    productionHostPatterns: config.productionHostPatternsText.split('\n').filter(s => s.trim()),
-    productionHostExcludePatterns: config.productionHostExcludePatternsText.split('\n').filter(s => s.trim()),
-    masterDbIPs: config.masterDbIPsText.split('\n').filter(s => s.trim()),
+    opsPersonnel: Array.isArray(config.opsPersonnelText.split('\n').filter(s => s.trim()))
+      ? [...config.opsPersonnelText.split('\n').filter(s => s.trim())]
+      : [],
+    productionHostPatterns: Array.isArray(config.productionHostPatternsText.split('\n').filter(s => s.trim()))
+      ? [...config.productionHostPatternsText.split('\n').filter(s => s.trim())]
+      : [],
+    productionHostExcludePatterns: Array.isArray(config.productionHostExcludePatternsText.split('\n').filter(s => s.trim()))
+      ? [...config.productionHostExcludePatternsText.split('\n').filter(s => s.trim())]
+      : [],
+    masterDbIPs: Array.isArray(config.masterDbIPsText.split('\n').filter(s => s.trim()))
+      ? [...config.masterDbIPsText.split('\n').filter(s => s.trim())]
+      : [],
     masterDbIPRange: {
       start: String(config.masterDbIPRange.start || ''),
       end: String(config.masterDbIPRange.end || '')
-    }
+    },
+    duplicateFields: Array.isArray(config.duplicateFields)
+      ? [...config.duplicateFields]
+      : ['主机IP', '主机名称', '主机网络', '主机组', '协议', '账户登录名'],
+    longTimeDays: Number(config.longTimeDays) || 30,
+    maxHistoryFiles: Number(config.maxHistoryFiles) || 50
   }
 }
 
-// 检查IPC是否可用
 const checkIPC = () => {
   if (!window.electron || !window.electron.ipcRenderer) {
     error.value = 'IPC未加载，请刷新页面重试'
@@ -242,15 +346,67 @@ const checkIPC = () => {
   return true
 }
 
-// 打开配置弹框
 const openConfigDialog = () => {
   configDialogVisible.value = true
 }
 
-// 加载配置
-const loadConfig = async () => {
-  if (!checkIPC()) return
-  
+const openHistoryManager = () => {
+  emit('open-history-manager')
+}
+
+const openLogManager = () => {
+  emit('open-log-manager')
+}
+
+const handleConfigSave = async (configObj) => {
+  if (!checkIPC()) return false
+
+  try {
+    // 确保配置对象完全可序列化
+    const serializableConfig = {
+      opsPersonnel: Array.isArray(configObj.opsPersonnel) ? [...configObj.opsPersonnel] : [],
+      productionHostPatterns: Array.isArray(configObj.productionHostPatterns) ? [...configObj.productionHostPatterns] : [],
+      productionHostExcludePatterns: Array.isArray(configObj.productionHostExcludePatterns) ? [...configObj.productionHostExcludePatterns] : [],
+      masterDbIPs: Array.isArray(configObj.masterDbIPs) ? [...configObj.masterDbIPs] : [],
+      masterDbIPRange: {
+        start: String(configObj.masterDbIPRange?.start || ''),
+        end: String(configObj.masterDbIPRange?.end || '')
+      },
+      duplicateFields: Array.isArray(configObj.duplicateFields) ? [...configObj.duplicateFields] : ['主机IP', '主机名称', '主机网络', '主机组', '协议', '账户登录名'],
+      longTimeDays: Number(configObj.longTimeDays) || 30
+    }
+
+    const saveResult = await window.electron.ipcRenderer.invoke('save-config', serializableConfig)
+    if (saveResult.success) {
+      // 保存成功后，更新本地config对象
+      config.opsPersonnelText = serializableConfig.opsPersonnel.join('\n')
+      config.productionHostPatternsText = serializableConfig.productionHostPatterns.join('\n')
+      config.productionHostExcludePatternsText = serializableConfig.productionHostExcludePatterns.join('\n')
+      config.masterDbIPsText = serializableConfig.masterDbIPs.join('\n')
+      config.masterDbIPRange = {
+        start: serializableConfig.masterDbIPRange.start,
+        end: serializableConfig.masterDbIPRange.end
+      }
+      config.duplicateFields = [...serializableConfig.duplicateFields]
+      config.longTimeDays = serializableConfig.longTimeDays
+
+      ElMessage.success('配置已保存')
+      return true
+    } else {
+      error.value = '保存配置失败: ' + saveResult.error
+      ElMessage.error('保存配置失败: ' + saveResult.error)
+      return false
+    }
+  } catch (err) {
+    error.value = '保存配置失败: ' + err.message
+    ElMessage.error('保存配置失败: ' + err.message)
+    return false
+  }
+}
+
+const handleConfigLoad = async () => {
+  if (!checkIPC()) return null
+
   try {
     const savedConfig = await window.electron.ipcRenderer.invoke('load-config')
     config.opsPersonnelText = savedConfig.opsPersonnel.join('\n')
@@ -258,36 +414,21 @@ const loadConfig = async () => {
     config.productionHostExcludePatternsText = (savedConfig.productionHostExcludePatterns || []).join('\n')
     config.masterDbIPsText = savedConfig.masterDbIPs.join('\n')
     config.masterDbIPRange = savedConfig.masterDbIPRange || config.masterDbIPRange
+    config.duplicateFields = savedConfig.duplicateFields || ['主机IP', '主机名称', '主机网络', '主机组', '协议', '账户登录名']
+    config.longTimeDays = savedConfig.longTimeDays || 30
+    config.maxHistoryFiles = savedConfig.maxHistoryFiles || 50
     ElMessage.success('配置已加载')
+    return savedConfig
   } catch (err) {
     error.value = '加载配置失败: ' + err.message
     ElMessage.error('加载配置失败: ' + err.message)
+    return null
   }
 }
 
-// 保存配置
-const saveConfig = async () => {
-  if (!checkIPC()) return
-  
-  try {
-    const configObj = getConfigObject()
-    const saveResult = await window.electron.ipcRenderer.invoke('save-config', configObj)
-    if (saveResult.success) {
-      ElMessage.success('配置已保存')
-    } else {
-      error.value = '保存配置失败: ' + saveResult.error
-      ElMessage.error('保存配置失败: ' + saveResult.error)
-    }
-  } catch (err) {
-    error.value = '保存配置失败: ' + err.message
-    ElMessage.error('保存配置失败: ' + err.message)
-  }
-}
-
-// 选择文件
 const selectFile = async () => {
   if (!checkIPC()) return
-  
+
   try {
     const filePath = await window.electron.ipcRenderer.invoke('select-excel-file')
     if (filePath) {
@@ -302,56 +443,75 @@ const selectFile = async () => {
   }
 }
 
-// 处理文件
 const processFile = async () => {
   if (!checkIPC()) return
   if (!selectedFile.value) return
-  
+
   processing.value = true
   error.value = ''
-  
+  progressMessage.value = '准备开始...'
+  progressPercentage.value = 0
+
+  // 监听进度事件
+  const progressHandler = (event, progress) => {
+    progressMessage.value = progress.message || '处理中...'
+    const stageProgress = {
+      'start': 10,
+      'history': 30,
+      'history-error': 30,
+      'processing': 60,
+      'preview': 80,
+      'saving': 95,
+      'complete': 100
+    }
+    progressPercentage.value = stageProgress[progress.stage] || 0
+  }
+
+  window.electron.ipcRenderer.on('process-progress', progressHandler)
+
   try {
-    console.log('开始处理文件:', selectedFile.value)
     const configObj = getConfigObject()
-    console.log('配置对象:', configObj)
-    
     const processResult = await window.electron.ipcRenderer.invoke('process-excel', selectedFile.value, configObj)
-    console.log('处理结果:', processResult)
-    
+
+    progressMessage.value = '处理完成'
+    progressPercentage.value = 100
+
     if (!processResult) {
       throw new Error('未收到处理结果，请检查控制台错误信息')
     }
-    
+
     if (processResult.success) {
       result.value = processResult
       cacheKey.value = processResult.cacheKey
-      // 设置第一个sheet为默认激活的tab
       if (processResult.preview && Object.keys(processResult.preview).length > 0) {
-        activeSheetTab.value = Object.keys(processResult.preview)[0]
+        const firstSheet = Object.keys(processResult.preview)[0]
+        activeSheetTab.value = firstSheet
       }
-      activeTab.value = 'preview'
-      ElMessage.success('处理完成')
+      ElMessage.success('检查完成')
     } else {
       const errorMsg = processResult.error || '处理失败'
       error.value = errorMsg
       ElMessage.error(errorMsg)
-      console.error('处理失败:', errorMsg)
     }
   } catch (err) {
     const errorMsg = '处理文件失败: ' + (err.message || String(err))
     error.value = errorMsg
     ElMessage.error(errorMsg)
-    console.error('处理文件异常:', err)
-    console.error('错误堆栈:', err.stack)
+    progressMessage.value = '处理失败'
   } finally {
+    window.electron.ipcRenderer.removeListener('process-progress', progressHandler)
     processing.value = false
+    setTimeout(() => {
+      progressMessage.value = ''
+      progressPercentage.value = 0
+    }, 2000)
   }
 }
 
-// 处理删除标记变化
 const handleDeleteMarkChange = async (row) => {
   if (!checkIPC() || !cacheKey.value) return
-  
+
+  updating.value = true
   try {
     const updateResult = await window.electron.ipcRenderer.invoke(
       'update-delete-mark',
@@ -360,27 +520,23 @@ const handleDeleteMarkChange = async (row) => {
       row.originalIndex,
       row.shouldDelete
     )
-    
+
     if (updateResult.success) {
-      // 更新统计信息
       result.value.summary = updateResult.summary
-      // 更新预览数据
       result.value.preview = updateResult.preview
-      // 更新当前行的删除标记显示
       row['删除标记'] = row.shouldDelete ? '删除' : ''
     } else {
       ElMessage.error(updateResult.error || '更新失败')
-      // 恢复原状态
       row.shouldDelete = !row.shouldDelete
     }
   } catch (err) {
     ElMessage.error('更新删除标记失败: ' + err.message)
-    // 恢复原状态
     row.shouldDelete = !row.shouldDelete
+  } finally {
+    updating.value = false
   }
 }
 
-// 获取筛选后的记录
 const getFilteredRecords = (records) => {
   if (previewFilter.value === 'all') {
     return records
@@ -389,27 +545,147 @@ const getFilteredRecords = (records) => {
   }
 }
 
-// 获取行的类名（用于高亮标记删除的行）
-const getRowClassName = ({ row }) => {
-  return row.shouldDelete ? 'marked-row' : ''
+// 当前表格数据
+const currentTableData = computed(() => {
+  if (!result.value || !result.value.preview || !activeSheetTab.value) {
+    return []
+  }
+  const records = result.value.preview[activeSheetTab.value] || []
+  return getFilteredRecords(records)
+})
+
+// 表格列配置
+const tableColumns = computed(() => {
+  return [
+    {
+      key: '主机IP',
+      dataKey: '主机IP',
+      title: '主机IP',
+      width: 150,
+      fixed: 'left'
+    },
+    {
+      key: '主机名称',
+      dataKey: '主机名称',
+      title: '主机名称',
+      width: 200,
+      cellRenderer: ({ rowData }) => {
+        return h('div', {
+          style: { padding: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+          title: rowData['主机名称']
+        }, rowData['主机名称'] || '-')
+      }
+    },
+    {
+      key: '主机网络',
+      dataKey: '主机网络',
+      title: '主机网络',
+      width: 180,
+      cellRenderer: ({ rowData }) => {
+        return h('div', {
+          style: { padding: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+          title: rowData['主机网络']
+        }, rowData['主机网络'] || '-')
+      }
+    },
+    {
+      key: '主机组',
+      dataKey: '主机组',
+      title: '主机组',
+      width: 180,
+      cellRenderer: ({ rowData }) => {
+        return h('div', {
+          style: { padding: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+          title: rowData['主机组']
+        }, rowData['主机组'] || '-')
+      }
+    },
+    {
+      key: '协议',
+      dataKey: '协议',
+      title: '协议',
+      width: 100,
+      cellRenderer: ({ rowData }) => {
+        if (!rowData['协议']) return h('span', '-')
+        return h(ElTag, {
+          type: getProtocolTag(rowData['协议']),
+          size: 'small'
+        }, () => rowData['协议'])
+      }
+    },
+    {
+      key: '账户登录名',
+      dataKey: '账户登录名',
+      title: '账户登录名',
+      width: 150
+    },
+    {
+      key: '删除原因',
+      dataKey: '删除原因',
+      title: '删除原因',
+      width: 250,
+      cellRenderer: ({ rowData }) => {
+        if (!rowData['删除原因']) {
+          return h('span', { style: { color: '#999', fontStyle: 'italic' } }, '-')
+        }
+        return h(ElTag, {
+          type: 'danger',
+          size: 'small'
+        }, () => rowData['删除原因'])
+      }
+    },
+    {
+      key: '删除标记',
+      dataKey: 'shouldDelete',
+      title: '删除标记',
+      width: 140,
+      fixed: 'right',
+      cellRenderer: ({ rowData }) => {
+        return h(ElSwitch, {
+          modelValue: rowData.shouldDelete,
+          'onUpdate:modelValue': (val) => {
+            rowData.shouldDelete = val
+            handleDeleteMarkChange(rowData)
+          },
+          activeText: '删除',
+          inactiveText: '保留',
+          activeColor: '#f56c6c'
+        })
+      }
+    }
+  ]
+})
+
+const getRowClassName = ({ rowIndex }) => {
+  const row = currentTableData.value[rowIndex]
+  return row && row.shouldDelete ? 'marked-row' : ''
 }
 
-// 保存结果
+const getProtocolTag = (protocol) => {
+  const map = {
+    SSH: 'success',
+    RDP: 'warning',
+    MySQL: 'danger',
+    MYSQL: 'danger'
+  }
+  return map[protocol?.toUpperCase()] || 'info'
+}
+
 const saveResult = async () => {
   if (!checkIPC()) return
   if (!selectedFile.value || !result.value || !cacheKey.value) return
-  
+
   try {
     const defaultPath = selectedFile.value.replace(/\.xlsx?$/, '_检查结果.xlsx')
     const outputPath = await window.electron.ipcRenderer.invoke('save-excel-file', defaultPath)
-    
+
     if (outputPath) {
       const saveResult = await window.electron.ipcRenderer.invoke(
         'save-processed-excel',
         cacheKey.value,
         outputPath
       )
-      
+
       if (saveResult.success) {
         ElMessage.success(`文件已保存到: ${saveResult.filePath}`)
       } else {
@@ -423,191 +699,298 @@ const saveResult = async () => {
   }
 }
 
-// 页面加载时自动加载配置
 onMounted(() => {
   setTimeout(() => {
     if (window.electron && window.electron.ipcRenderer) {
-      loadConfig()
+      handleConfigLoad()
     } else {
       error.value = 'IPC未加载，请刷新页面重试'
-      console.error('window.electron.ipcRenderer is not available')
     }
   }, 100)
 })
 </script>
 
-<style scoped>
-.auth-checker {
-  padding: 20px;
-  max-width: 1400px;
-  margin: 0 auto;
-  height: 100vh;
-  overflow: auto;
-}
+<style lang="stylus" scoped>
+.auth-checker-app
+  width 100vw
+  height 100vh
+  overflow-y auto
+  background linear-gradient(135deg, #667eea 0%, #764ba2 100%)
+  display flex
+  flex-direction column
 
-.header {
-  margin-bottom: 30px;
-  text-align: center;
-}
+.app-header
+  background rgba(255, 255, 255, 0.95)
+  backdrop-filter blur(10px)
+  box-shadow 0 2px 12px rgba(0, 0, 0, 0.1)
+  padding 0
+  z-index 1000
 
-.header h1 {
-  margin: 0 0 10px 0;
-  color: #333;
-}
+  .header-content
+    max-width 1600px
+    margin 0 auto
+    padding 20px 30px
+    display flex
+    justify-content space-between
+    align-items center
 
-.subtitle {
-  color: #666;
-  margin: 0;
-}
+    .logo-section
+      display flex
+      align-items center
+      gap 15px
 
-.content {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
+      .logo-icon
+        font-size 32px
+        color #667eea
 
-.main-panel {
-  background: #f9f9f9;
-  border-radius: 8px;
-  padding: 20px;
-  border: 1px solid #ddd;
-}
+      .logo-text
+        h1
+          margin 0
+          font-size 24px
+          font-weight 600
+          color #333
+          background linear-gradient(135deg, #667eea 0%, #764ba2 100%)
+          -webkit-background-clip text
+          -webkit-text-fill-color transparent
+          background-clip text
 
-.file-section {
-  margin-bottom: 20px;
-}
+        .subtitle
+          margin 5px 0 0 0
+          font-size 13px
+          color #999
 
-.file-info {
-  margin-bottom: 15px;
-}
+.app-content
+  flex 1
+  max-width 1600px
+  width 100%
+  margin 0 auto
+  padding 30px
+  overflow-y auto
 
-.file-info label {
-  font-weight: bold;
-  margin-right: 10px;
-}
+.file-card, .summary-card, .preview-card
+  margin-bottom 24px
+  border-radius 12px
+  overflow hidden
+  transition all 0.3s ease
 
-.file-path {
-  color: #666;
-  font-family: monospace;
-  word-break: break-all;
-}
+  &:hover
+    transform translateY(-2px)
+    box-shadow 0 8px 24px rgba(0, 0, 0, 0.12)
 
-.action-buttons {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
+  :deep(.el-card__header)
+    background linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)
+    border-bottom 1px solid #e4e7ed
+    padding 18px 24px
 
-.result-panel {
-  margin-top: 20px;
-}
+  :deep(.el-card__body)
+    padding 24px
 
-.summary {
-  display: flex;
-  gap: 30px;
-  margin-bottom: 20px;
-  padding: 15px;
-  background: white;
-  border-radius: 4px;
-}
+.card-header
+  display flex
+  justify-content space-between
+  align-items center
 
-.summary-item {
-  display: flex;
-  flex-direction: column;
-}
+  .card-title
+    display flex
+    align-items center
+    gap 8px
+    font-size 16px
+    font-weight 600
+    color #333
 
-.summary-item .label {
-  font-size: 12px;
-  color: #666;
-  margin-bottom: 5px;
-}
+.file-section
+  .file-info-wrapper
+    display flex
+    justify-content space-between
+    align-items center
+    gap 20px
 
-.summary-item .value {
-  font-size: 24px;
-  font-weight: bold;
-  color: #333;
-}
+    .file-info
+      flex 1
+      display flex
+      align-items center
+      gap 15px
+      padding 20px
+      background #f8f9fa
+      border-radius 8px
+      border 2px dashed #d9d9d9
+      transition all 0.3s ease
 
-.summary-item.highlight .value {
-  color: #f44336;
-}
+      &:hover
+        border-color #667eea
+        background #f0f4ff
 
-.reason-breakdown {
-  margin-bottom: 20px;
-  padding: 15px;
-  background: white;
-  border-radius: 4px;
-}
+      .file-icon
+        font-size 32px
+        color #667eea
 
-.reason-breakdown h3 {
-  margin-top: 0;
-  color: #555;
-}
+      .file-details
+        flex 1
+        min-width 0
 
-.reason-breakdown ul {
-  margin: 10px 0 0 0;
-  padding-left: 20px;
-}
+        .file-name
+          font-size 16px
+          font-weight 500
+          color #333
+          margin-bottom 5px
+          word-break break-all
 
-.table-container {
-  margin-top: 10px;
-}
+        .file-path
+          font-size 12px
+          color #999
+          word-break break-all
 
-.empty-preview {
-  text-align: center;
-  padding: 40px;
-  color: #999;
-}
+    .action-buttons
+      display flex
+      gap 12px
 
-.save-section {
-  text-align: center;
-  padding-top: 20px;
-  margin-top: 20px;
-  border-top: 1px solid #ddd;
-}
+.summary-grid
+  display grid
+  grid-template-columns repeat(auto-fit, minmax(200px, 1fr))
+  gap 20px
+  margin-bottom 24px
 
-.config-content {
-  padding: 10px 0;
-}
+  .summary-item
+    display flex
+    align-items center
+    gap 15px
+    padding 20px
+    background #fff
+    border-radius 8px
+    border 1px solid #e4e7ed
+    transition all 0.3s ease
 
-.config-section {
-  margin-bottom: 20px;
-}
+    &:hover
+      border-color #667eea
+      box-shadow 0 4px 12px rgba(102, 126, 234, 0.15)
 
-.config-section label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: bold;
-  color: #555;
-}
+    &.highlight
+      border-color #f56c6c
+      background linear-gradient(135deg, #fff5f5 0%, #ffe7e7 100%)
 
-.ip-range {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
+    .summary-icon
+      width 48px
+      height 48px
+      border-radius 12px
+      display flex
+      align-items center
+      justify-content center
+      font-size 24px
+      color #fff
 
-.ip-range span {
-  color: #666;
-}
+      &.total
+        background linear-gradient(135deg, #667eea 0%, #764ba2 100%)
 
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
+      &.records
+        background linear-gradient(135deg, #f093fb 0%, #f5576c 100%)
 
-.preview-controls {
-  margin-bottom: 15px;
-  display: flex;
-  justify-content: flex-end;
-}
+      &.danger
+        background linear-gradient(135deg, #fa709a 0%, #fee140 100%)
 
-:deep(.marked-row) {
-  background-color: #fff1f0;
-}
+      &.success
+        background linear-gradient(135deg, #30cfd0 0%, #330867 100%)
 
-:deep(.marked-row:hover) {
-  background-color: #ffe7e6 !important;
-}
+    .summary-content
+      flex 1
+
+      .summary-label
+        font-size 13px
+        color #999
+        margin-bottom 5px
+
+      .summary-value
+        font-size 28px
+        font-weight 700
+        color #333
+
+        &.danger-text
+          color #f56c6c
+
+        &.success-text
+          color #67c23a
+
+.reason-breakdown
+  padding 20px
+  background #fff
+  border-radius 8px
+  border 1px solid #e4e7ed
+
+  .breakdown-title
+    display flex
+    align-items center
+    gap 8px
+    margin 0 0 15px 0
+    font-size 16px
+    font-weight 600
+    color #333
+
+  .reason-tags
+    display flex
+    flex-wrap wrap
+    gap 10px
+
+    .reason-tag
+      font-size 14px
+      padding 8px 16px
+
+.preview-card
+  .preview-controls
+    display flex
+    gap 10px
+
+  :deep(.el-tabs__content)
+    padding 0
+    min-height 0
+
+.empty-preview
+  padding 60px 20px
+  text-align center
+
+.table-card
+  margin-top 24px
+  border-radius 12px
+  overflow hidden
+
+  :deep(.el-card__header)
+    background linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)
+    border-bottom 1px solid #e4e7ed
+    padding 18px 24px
+
+  .card-header
+    display flex
+    justify-content space-between
+    align-items center
+
+    .table-info
+      font-size 14px
+      color #666
+
+  .table-container
+    padding 10px
+    background #fff
+
+    :deep(.el-table-v2)
+      border 1px solid #e4e7ed
+      border-radius 4px
+
+    :deep(.marked-row)
+      background-color #fff1f0 !important
+
+    :deep(.marked-row:hover)
+      background-color #ffe7e6 !important
+
+.save-section
+  text-align center
+  padding 30px
+  background #fff
+  border-radius 12px
+  box-shadow 0 2px 12px rgba(0, 0, 0, 0.1)
+
+.error-alert
+  margin-top 20px
+  border-radius 8px
+
+.text-muted
+  color #999
+  font-style italic
 </style>

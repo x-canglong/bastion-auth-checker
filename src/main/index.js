@@ -5,11 +5,177 @@ import icon from '../../resources/icon.png?asset'
 import AuthChecker from './utils/authChecker'
 import ExcelProcessor from './utils/excelProcessor'
 import fs from 'fs'
+import crypto from 'crypto'
+
+// 日志管理：开发环境输出详细日志，生产环境只输出错误
+const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
+
+// 获取日志文件路径
+const getLogFilePath = () => {
+  const logsDir = join(app.getPath('userData'), 'logs')
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true })
+  }
+  // 按日期创建日志文件
+  const today = new Date()
+  const dateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`
+  return join(logsDir, `app-${dateStr}.log`)
+}
+
+// 写入日志到文件
+const writeLogToFile = (level, ...args) => {
+  try {
+    const logFilePath = getLogFilePath()
+    const timestamp = new Date().toISOString()
+    const message = args.map(arg => {
+      if (typeof arg === 'object') {
+        try {
+          return JSON.stringify(arg, null, 2)
+        } catch {
+          return String(arg)
+        }
+      }
+      return String(arg)
+    }).join(' ')
+    const logLine = `[${timestamp}] [${level.toUpperCase()}] ${message}\n`
+    fs.appendFileSync(logFilePath, logLine, 'utf-8')
+  } catch (error) {
+    // 如果写入日志文件失败，不影响主程序运行
+    console.error('写入日志文件失败:', error)
+  }
+}
+
+// 日志管理对象
+const log = {
+  info: (...args) => {
+    if (isDev) console.log(...args)
+    writeLogToFile('info', ...args)
+  },
+  error: (...args) => {
+    console.error(...args)
+    writeLogToFile('error', ...args)
+  },
+  warn: (...args) => {
+    if (isDev) console.warn(...args)
+    writeLogToFile('warn', ...args)
+  }
+}
 
 let mainWindow = null
 
 // 存储处理结果（用于更新删除标记）- 移到外部避免每次重新创建
 const processedResultsCache = new Map()
+
+// 检查历史索引文件路径
+const getCheckHistoryIndexPath = () => {
+  return join(app.getPath('userData'), 'check-history-index.json')
+}
+
+// 历史文件存储目录
+const getHistoryFilesDir = () => {
+  const dir = join(app.getPath('userData'), 'history-files')
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true })
+  }
+  return dir
+}
+
+// 加载检查历史索引
+const loadCheckHistoryIndex = () => {
+  const indexPath = getCheckHistoryIndexPath()
+  try {
+    if (fs.existsSync(indexPath)) {
+      const data = fs.readFileSync(indexPath, 'utf-8')
+      return JSON.parse(data)
+    }
+  } catch (error) {
+    console.error('加载检查历史索引失败:', error)
+  }
+  return {}
+}
+
+// 保存检查历史索引
+const saveCheckHistoryIndex = (index) => {
+  const indexPath = getCheckHistoryIndexPath()
+  try {
+    fs.writeFileSync(indexPath, JSON.stringify(index, null, 2), 'utf-8')
+  } catch (error) {
+    log.error('保存检查历史索引失败:', error)
+  }
+}
+
+// 获取文件的hash值（用于唯一标识文件）
+const getFileHash = (filePath) => {
+  try {
+    const fileBuffer = fs.readFileSync(filePath)
+    return crypto.createHash('md5').update(fileBuffer).digest('hex')
+  } catch (error) {
+    log.error('计算文件hash失败:', error)
+    // 如果读取失败，使用文件名+修改时间作为fallback
+    try {
+      const stats = fs.statSync(filePath)
+      return crypto.createHash('md5').update(`${filePath}_${stats.mtimeMs}`).digest('hex')
+    } catch (e) {
+      // 最后的fallback：使用路径hash
+      return crypto.createHash('md5').update(filePath).digest('hex')
+    }
+  }
+}
+
+// 格式化时间戳为年月日时分秒格式（如：20240101_120000）
+const formatTimestamp = (timestamp) => {
+  const date = new Date(timestamp)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${year}${month}${day}_${hours}${minutes}${seconds}`
+}
+
+// 获取权限的唯一标识（用于比较）
+const getPermissionKey = (record) => {
+  return `${record['主机IP'] || ''}_${record['主机名称'] || ''}_${record['主机网络'] || ''}_${record['主机组'] || ''}_${record['协议'] || ''}_${record['账户登录名'] || ''}`
+}
+
+// 获取30天前（或设定天数前）的检查记录
+// 返回历史文件的路径，如果不存在则返回null
+const getHistoricalCheck = (fileHash, currentTime, longTimeDays) => {
+  const historyIndex = loadCheckHistoryIndex()
+  const fileHistory = historyIndex[fileHash] || []
+
+  // 计算目标时间（30天前）
+  const targetTime = currentTime - (longTimeDays * 24 * 60 * 60 * 1000)
+
+  // 查找最接近目标时间的检查记录（误差时间根据设置的长时间动态计算，为长时间的10%，最少1天）
+  const toleranceDays = Math.max(1, Math.floor(longTimeDays * 0.1))
+  const tolerance = toleranceDays * 24 * 60 * 60 * 1000
+  let closestCheck = null
+  let minDiff = Infinity
+
+  fileHistory.forEach(check => {
+    const diff = Math.abs(check.timestamp - targetTime)
+    if (diff < tolerance && diff < minDiff) {
+      minDiff = diff
+      closestCheck = check
+    }
+  })
+
+  if (closestCheck && closestCheck.filePath) {
+    // 检查历史文件是否存在
+    if (fs.existsSync(closestCheck.filePath)) {
+      return {
+        timestamp: closestCheck.timestamp,
+        filePath: closestCheck.filePath
+      }
+    } else {
+      log.warn('历史文件不存在:', closestCheck.filePath)
+    }
+  }
+
+  return null
+}
 
 // 注册所有IPC handlers（在应用启动时就注册，避免HMR问题）
 function registerIpcHandlers() {
@@ -24,11 +190,11 @@ function registerIpcHandlers() {
       ],
       properties: ['openFile']
     })
-    
+
     if (result.canceled) {
       return null
     }
-    
+
     return result.filePaths[0]
   })
 
@@ -43,41 +209,210 @@ function registerIpcHandlers() {
         { name: '所有文件', extensions: ['*'] }
       ]
     })
-    
+
     if (result.canceled) {
       return null
     }
-    
+
     return result.filePath
   })
 
   // 处理Excel文件
   ipcMain.handle('process-excel', async (event, filePath, config) => {
     try {
-      console.log('开始处理Excel文件:', filePath)
-      console.log('配置:', JSON.stringify(config, null, 2))
-      
+      log.info('开始处理Excel文件:', filePath)
+
+      const currentCheckTime = Date.now()
+      const longTimeDays = config.longTimeDays || 30
+
+      // 发送进度：开始处理
+      event.sender.send('process-progress', { stage: 'start', message: '开始读取Excel文件...' })
+
+      // 获取文件的hash值作为唯一标识
+      const fileHash = getFileHash(filePath)
+      log.info('文件hash:', fileHash)
+
+      log.info('当前检查时间:', new Date(currentCheckTime).toLocaleString())
+
+      // 如果有历史文件，用最新规则重新处理历史文件以获取历史权限
+      let processedHistoricalCheck = null
+      const historicalCheckInfo = getHistoricalCheck(fileHash, currentCheckTime, longTimeDays)
+      if (historicalCheckInfo && historicalCheckInfo.filePath) {
+        log.info(`找到${longTimeDays}天前的历史文件:`, historicalCheckInfo.filePath)
+        log.info(`历史文件时间:`, new Date(historicalCheckInfo.timestamp).toLocaleString())
+
+        event.sender.send('process-progress', { stage: 'history', message: '正在处理历史文件...' })
+
+        try {
+          // 用最新规则重新处理历史文件
+          const tempAuthChecker = new AuthChecker(config)
+          const historicalResult = ExcelProcessor.processExcel(historicalCheckInfo.filePath, tempAuthChecker, {
+            historicalCheck: null, // 历史文件不需要再查找更早的历史
+            currentCheckTime: historicalCheckInfo.timestamp,
+            longTimeDays: 0 // 不需要再往前查找
+          })
+
+          // 提取历史权限（只保存生产环境和主数据库的权限）
+          const historicalPermissions = {}
+          Object.keys(historicalResult.processedSheets).forEach(sheetName => {
+            const processed = historicalResult.processedSheets[sheetName]
+            const permissionKeys = new Set()
+
+            processed.results.forEach(r => {
+              const isProd = tempAuthChecker.isProductionHost(r.record['主机名称'])
+              const isMasterDb = tempAuthChecker.isMasterDatabase(r.record['主机IP'], r.record['主机名称'])
+
+              if ((isProd || isMasterDb) && !tempAuthChecker.isOpsPersonnel(sheetName)) {
+                const key = getPermissionKey(r.record)
+                permissionKeys.add(key)
+              }
+            })
+
+            if (permissionKeys.size > 0) {
+              historicalPermissions[sheetName] = Array.from(permissionKeys)
+            }
+          })
+
+          processedHistoricalCheck = {
+            timestamp: historicalCheckInfo.timestamp,
+            permissions: historicalPermissions
+          }
+
+          log.info(`历史权限数量:`, Object.keys(historicalPermissions).reduce((sum, sheet) => sum + (historicalPermissions[sheet]?.length || 0), 0))
+        } catch (error) {
+          log.error('处理历史文件失败:', error)
+          log.info('将忽略历史检查，继续处理当前文件')
+          // 错误恢复：继续处理当前文件，只是没有历史对比
+          event.sender.send('process-progress', { stage: 'history-error', message: '历史文件处理失败，将忽略历史检查继续处理' })
+        }
+      } else {
+        log.info(`未找到${longTimeDays}天前的历史文件（首次检查或历史记录不足）`)
+      }
+
+      event.sender.send('process-progress', { stage: 'processing', message: '正在检查当前文件...' })
+
       const authChecker = new AuthChecker(config)
-      const result = ExcelProcessor.processExcel(filePath, authChecker)
+      const result = ExcelProcessor.processExcel(filePath, authChecker, {
+        historicalCheck: processedHistoricalCheck,
+        currentCheckTime,
+        longTimeDays
+      })
+
+      event.sender.send('process-progress', { stage: 'preview', message: '正在生成预览...' })
+
       const preview = ExcelProcessor.generatePreview(result)
-      
-      console.log('处理完成，工作表数量:', Object.keys(result.processedSheets).length)
-      console.log('预览数据:', Object.keys(preview).length, '个工作表')
-      
+
+      log.info('处理完成，工作表数量:', Object.keys(result.processedSheets).length)
+      log.info('预览数据:', Object.keys(preview).length, '个工作表')
+
+      // 保存当前Excel文件副本到历史目录
+      const historyFilesDir = getHistoryFilesDir()
+      const timeStr = formatTimestamp(currentCheckTime)
+      // 获取原始文件名（不含路径）
+      const originalFileName = filePath.split(/[/\\]/).pop()
+      // 保存时使用hash_时间戳格式，但索引中保存原始文件名
+      const historyFileName = `${fileHash}_${timeStr}.xlsx`
+      const historyFilePath = join(historyFilesDir, historyFileName)
+
+      event.sender.send('process-progress', { stage: 'saving', message: '正在保存历史文件...' })
+
+      try {
+        // 复制当前文件到历史目录
+        fs.copyFileSync(filePath, historyFilePath)
+        log.info('已保存历史文件:', historyFilePath)
+      } catch (error) {
+        log.error('保存历史文件失败:', error)
+      }
+
+      // 更新历史索引
+      const historyIndex = loadCheckHistoryIndex()
+
+      // 收集所有历史文件记录（跨所有文件hash）
+      const allHistoryFiles = []
+      Object.keys(historyIndex).forEach(hash => {
+        historyIndex[hash].forEach(check => {
+          allHistoryFiles.push({
+            hash,
+            timestamp: check.timestamp,
+            filePath: check.filePath,
+            originalFileName: check.originalFileName || check.filePath.split(/[/\\]/).pop() // 兼容旧数据
+          })
+        })
+      })
+
+      // 添加当前文件记录
+      if (!historyIndex[fileHash]) {
+        historyIndex[fileHash] = []
+      }
+      historyIndex[fileHash].push({
+        timestamp: currentCheckTime,
+        filePath: historyFilePath,
+        originalFileName: originalFileName // 保存原始文件名
+      })
+      allHistoryFiles.push({
+        hash: fileHash,
+        timestamp: currentCheckTime,
+        filePath: historyFilePath
+      })
+
+      // 限制历史文件数量（最多50个，超出后删除最早上传的文件）
+      const maxHistoryFiles = config.maxHistoryFiles || 50
+      if (allHistoryFiles.length > maxHistoryFiles) {
+        // 按时间戳排序，最早的在前
+        allHistoryFiles.sort((a, b) => a.timestamp - b.timestamp)
+
+        // 删除超出数量的最早文件
+        const filesToDelete = allHistoryFiles.slice(0, allHistoryFiles.length - maxHistoryFiles)
+        filesToDelete.forEach(file => {
+          // 从索引中删除
+          if (historyIndex[file.hash]) {
+            historyIndex[file.hash] = historyIndex[file.hash].filter(
+              check => check.filePath !== file.filePath
+            )
+            // 如果该hash的记录为空，删除hash键
+            if (historyIndex[file.hash].length === 0) {
+              delete historyIndex[file.hash]
+            }
+          }
+
+          // 删除物理文件
+          if (file.filePath && fs.existsSync(file.filePath)) {
+            try {
+              fs.unlinkSync(file.filePath)
+              log.info('已删除最早的历史文件:', file.filePath)
+            } catch (error) {
+              log.error('删除历史文件失败:', error)
+            }
+          }
+        })
+      }
+
+      saveCheckHistoryIndex(historyIndex)
+
+      event.sender.send('process-progress', { stage: 'complete', message: '处理完成' })
+
       // 缓存处理结果
-      const cacheKey = `${filePath}_${Date.now()}`
+      const cacheKey = `${filePath}_${currentCheckTime}`
       processedResultsCache.set(cacheKey, result)
-      
+
+      // 返回可序列化的对象（不包含workbook等不可序列化的对象）
       return {
         success: true,
-        summary: result.summary,
+        summary: {
+          totalSheets: result.summary.totalSheets || 0,
+          totalRecords: result.summary.totalRecords || 0,
+          markedForDeletion: result.summary.markedForDeletion || 0,
+          byReason: result.summary.byReason || {}
+        },
         preview,
         filePath,
-        cacheKey
+        cacheKey,
+        checkTime: currentCheckTime,
+        historicalCheckTime: processedHistoricalCheck ? processedHistoricalCheck.timestamp : null
       }
     } catch (error) {
-      console.error('处理Excel文件失败:', error)
-      console.error('错误堆栈:', error.stack)
+      log.error('处理Excel文件失败:', error)
+      log.error('错误堆栈:', error.stack)
       return {
         success: false,
         error: error.message || String(error)
@@ -95,10 +430,10 @@ function registerIpcHandlers() {
           error: '处理结果已过期，请重新处理文件'
         }
       }
-      
+
       const updatedResult = ExcelProcessor.updateDeleteMark(result, sheetName, recordIndex, shouldDelete)
       const preview = ExcelProcessor.generatePreview(updatedResult)
-      
+
       return {
         success: true,
         summary: updatedResult.summary,
@@ -122,9 +457,9 @@ function registerIpcHandlers() {
           error: '处理结果已过期，请重新处理文件'
         }
       }
-      
+
       const savedPath = ExcelProcessor.saveExcel(result, outputPath)
-      
+
       return {
         success: true,
         filePath: savedPath
@@ -140,17 +475,7 @@ function registerIpcHandlers() {
   // 加载配置文件
   ipcMain.handle('load-config', async () => {
     const configPath = join(app.getPath('userData'), 'auth-checker-config.json')
-    try {
-      if (fs.existsSync(configPath)) {
-        const configData = fs.readFileSync(configPath, 'utf-8')
-        return JSON.parse(configData)
-      }
-    } catch (error) {
-      console.error('加载配置失败:', error)
-    }
-    
-    // 返回默认配置
-    return {
+    const defaultConfig = {
       opsPersonnel: ['王礼鑫', '王鹏辉', '杨志智', '张涛'],
       productionHostPatterns: ['prd', 'pehx-outpub-'],
       productionHostExcludePatterns: ['uat'],
@@ -158,8 +483,57 @@ function registerIpcHandlers() {
       masterDbIPRange: {
         start: '192.168.240.150',
         end: '192.168.240.190'
-      }
+      },
+      duplicateFields: ['主机IP', '主机名称', '主机网络', '主机组', '协议', '账户登录名'],
+      longTimeDays: 30,
+      maxHistoryFiles: 50
     }
+
+    try {
+      if (fs.existsSync(configPath)) {
+        const configData = fs.readFileSync(configPath, 'utf-8')
+        const loadedConfig = JSON.parse(configData)
+
+        // 合并默认配置，确保新字段存在
+        const mergedConfig = {
+          ...defaultConfig,
+          ...loadedConfig,
+          // 确保新字段有默认值（如果旧配置没有）
+          duplicateFields: loadedConfig.duplicateFields || defaultConfig.duplicateFields,
+          longTimeDays: loadedConfig.longTimeDays !== undefined ? loadedConfig.longTimeDays : defaultConfig.longTimeDays,
+          maxHistoryFiles: loadedConfig.maxHistoryFiles !== undefined ? loadedConfig.maxHistoryFiles : defaultConfig.maxHistoryFiles,
+          masterDbIPRange: {
+            ...defaultConfig.masterDbIPRange,
+            ...loadedConfig.masterDbIPRange
+          }
+        }
+
+        // 如果旧配置缺少新字段，自动保存更新后的配置
+        if (!loadedConfig.duplicateFields || loadedConfig.longTimeDays === undefined || loadedConfig.maxHistoryFiles === undefined) {
+          const cleanConfig = {
+            opsPersonnel: Array.isArray(mergedConfig.opsPersonnel) ? mergedConfig.opsPersonnel : [],
+            productionHostPatterns: Array.isArray(mergedConfig.productionHostPatterns) ? mergedConfig.productionHostPatterns : [],
+            productionHostExcludePatterns: Array.isArray(mergedConfig.productionHostExcludePatterns) ? mergedConfig.productionHostExcludePatterns : [],
+            masterDbIPs: Array.isArray(mergedConfig.masterDbIPs) ? mergedConfig.masterDbIPs : [],
+            masterDbIPRange: {
+              start: String(mergedConfig.masterDbIPRange?.start || '192.168.240.150'),
+              end: String(mergedConfig.masterDbIPRange?.end || '192.168.240.190')
+            },
+            duplicateFields: Array.isArray(mergedConfig.duplicateFields) ? mergedConfig.duplicateFields : defaultConfig.duplicateFields,
+            longTimeDays: Number(mergedConfig.longTimeDays) || 30,
+            maxHistoryFiles: Number(mergedConfig.maxHistoryFiles) || 50
+          }
+          fs.writeFileSync(configPath, JSON.stringify(cleanConfig, null, 2), 'utf-8')
+        }
+
+        return mergedConfig
+      }
+    } catch (error) {
+      log.error('加载配置失败:', error)
+    }
+
+    // 返回默认配置
+    return defaultConfig
   })
 
   // 保存配置文件
@@ -176,14 +550,385 @@ function registerIpcHandlers() {
         masterDbIPRange: {
           start: String(config.masterDbIPRange?.start || '192.168.240.150'),
           end: String(config.masterDbIPRange?.end || '192.168.240.190')
-        }
+        },
+        duplicateFields: Array.isArray(config.duplicateFields) ? config.duplicateFields : ['主机IP', '主机名称', '主机网络', '主机组', '协议', '账户登录名'],
+        longTimeDays: Number(config.longTimeDays) || 30,
+        maxHistoryFiles: Number(config.maxHistoryFiles) || 50
       }
-      
+
       const configString = JSON.stringify(cleanConfig, null, 2)
       fs.writeFileSync(configPath, configString, 'utf-8')
       return { success: true }
     } catch (error) {
-      console.error('保存配置失败:', error)
+      log.error('保存配置失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 获取历史文件列表
+  ipcMain.handle('get-history-files', async () => {
+    try {
+      const historyIndex = loadCheckHistoryIndex()
+      const historyFilesDir = getHistoryFilesDir()
+      const files = []
+
+      Object.keys(historyIndex).forEach(fileHash => {
+        historyIndex[fileHash].forEach(check => {
+          const filePath = check.filePath
+          const exists = fs.existsSync(filePath)
+          let fileSize = 0
+          if (exists) {
+            try {
+              const stats = fs.statSync(filePath)
+              fileSize = stats.size
+            } catch (e) {
+              // 忽略错误
+            }
+          }
+
+          files.push({
+            fileHash,
+            fileName: check.originalFileName || filePath.split(/[/\\]/).pop(), // 优先使用原始文件名
+            filePath,
+            timestamp: check.timestamp,
+            fileSize,
+            exists
+          })
+        })
+      })
+
+      // 按时间戳倒序排序
+      files.sort((a, b) => b.timestamp - a.timestamp)
+
+      return { success: true, files }
+    } catch (error) {
+      log.error('获取历史文件列表失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 下载历史文件
+  ipcMain.handle('download-history-file', async (event, filePath, originalFileName) => {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return { success: false, error: '文件不存在' }
+      }
+
+      const { filePath: savePath } = await dialog.showSaveDialog(mainWindow, {
+        title: '保存文件',
+        defaultPath: originalFileName || filePath.split(/[/\\]/).pop(),
+        filters: [
+          { name: 'Excel文件', extensions: ['xlsx'] }
+        ]
+      })
+
+      if (savePath) {
+        fs.copyFileSync(filePath, savePath)
+        return { success: true, filePath: savePath }
+      } else {
+        return { success: false, error: '用户取消操作' }
+      }
+    } catch (error) {
+      log.error('下载历史文件失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 预览历史文件（返回文件路径供前端打开）
+  ipcMain.handle('preview-history-file', async (event, filePath) => {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return { success: false, error: '文件不存在' }
+      }
+
+      // 打开文件所在文件夹并选中文件
+      shell.showItemInFolder(filePath)
+      return { success: true }
+    } catch (error) {
+      log.error('预览历史文件失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 删除历史文件
+  ipcMain.handle('delete-history-file', async (event, filePath) => {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return { success: false, error: '文件不存在' }
+      }
+
+      // 从索引中删除
+      const historyIndex = loadCheckHistoryIndex()
+      let deleted = false
+
+      Object.keys(historyIndex).forEach(fileHash => {
+        const originalLength = historyIndex[fileHash].length
+        historyIndex[fileHash] = historyIndex[fileHash].filter(
+          check => check.filePath !== filePath
+        )
+        if (historyIndex[fileHash].length < originalLength) {
+          deleted = true
+        }
+        if (historyIndex[fileHash].length === 0) {
+          delete historyIndex[fileHash]
+        }
+      })
+
+      if (deleted) {
+        // 删除物理文件
+        fs.unlinkSync(filePath)
+        saveCheckHistoryIndex(historyIndex)
+        log.info('已删除历史文件:', filePath)
+        return { success: true }
+      } else {
+        return { success: false, error: '索引中未找到该文件' }
+      }
+    } catch (error) {
+      log.error('删除历史文件失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 清理历史文件索引（删除无效记录）
+  ipcMain.handle('cleanup-history-index', async () => {
+    try {
+      const historyIndex = loadCheckHistoryIndex()
+      let cleanedCount = 0
+
+      Object.keys(historyIndex).forEach(fileHash => {
+        const originalLength = historyIndex[fileHash].length
+        historyIndex[fileHash] = historyIndex[fileHash].filter(check => {
+          if (check.filePath && fs.existsSync(check.filePath)) {
+            return true
+          } else {
+            cleanedCount++
+            return false
+          }
+        })
+        if (historyIndex[fileHash].length === 0) {
+          delete historyIndex[fileHash]
+        }
+      })
+
+      saveCheckHistoryIndex(historyIndex)
+      log.info(`已清理 ${cleanedCount} 个无效的历史文件记录`)
+      return { success: true, cleanedCount }
+    } catch (error) {
+      log.error('清理历史文件索引失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 导出配置
+  ipcMain.handle('export-config', async () => {
+    try {
+      const configPath = join(app.getPath('userData'), 'auth-checker-config.json')
+      if (!fs.existsSync(configPath)) {
+        return { success: false, error: '配置文件不存在' }
+      }
+
+      const { filePath } = await dialog.showSaveDialog(mainWindow, {
+        title: '导出配置',
+        defaultPath: 'bastion-auth-checker-config.json',
+        filters: [
+          { name: 'JSON文件', extensions: ['json'] }
+        ]
+      })
+
+      if (filePath) {
+        fs.copyFileSync(configPath, filePath)
+        return { success: true, filePath }
+      } else {
+        return { success: false, error: '用户取消操作' }
+      }
+    } catch (error) {
+      log.error('导出配置失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 导入配置
+  ipcMain.handle('import-config', async () => {
+    try {
+      const { filePaths } = await dialog.showOpenDialog(mainWindow, {
+        title: '导入配置',
+        filters: [
+          { name: 'JSON文件', extensions: ['json'] }
+        ],
+        properties: ['openFile']
+      })
+
+      if (filePaths && filePaths.length > 0) {
+        const configData = fs.readFileSync(filePaths[0], 'utf-8')
+        const importedConfig = JSON.parse(configData)
+
+        // 验证配置格式
+        if (!importedConfig || typeof importedConfig !== 'object') {
+          return { success: false, error: '配置文件格式错误' }
+        }
+
+        // 保存到用户配置目录
+        const configPath = join(app.getPath('userData'), 'auth-checker-config.json')
+        fs.writeFileSync(configPath, JSON.stringify(importedConfig, null, 2), 'utf-8')
+
+        return { success: true, config: importedConfig }
+      } else {
+        return { success: false, error: '用户取消操作' }
+      }
+    } catch (error) {
+      log.error('导入配置失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 获取日志文件列表
+  ipcMain.handle('get-log-files', async () => {
+    try {
+      const logsDir = join(app.getPath('userData'), 'logs')
+      if (!fs.existsSync(logsDir)) {
+        return { success: true, files: [] }
+      }
+
+      const files = fs.readdirSync(logsDir)
+        .filter(file => file.endsWith('.log'))
+        .map(file => {
+          const filePath = join(logsDir, file)
+          const stats = fs.statSync(filePath)
+          return {
+            fileName: file,
+            filePath,
+            size: stats.size,
+            modifiedTime: stats.mtime.getTime()
+          }
+        })
+        .sort((a, b) => b.modifiedTime - a.modifiedTime)
+
+      return { success: true, files }
+    } catch (error) {
+      log.error('获取日志文件列表失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 读取日志文件内容
+  ipcMain.handle('read-log-file', async (event, filePath, options = {}) => {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return { success: false, error: '文件不存在' }
+      }
+
+      const { limit = 1000, level = 'all', keyword = '' } = options
+      const content = fs.readFileSync(filePath, 'utf-8')
+      const lines = content.split('\n').filter(line => line.trim())
+
+      // 过滤日志级别
+      let filteredLines = lines
+      if (level !== 'all') {
+        filteredLines = filteredLines.filter(line => {
+          const levelMatch = line.match(/\[(\w+)\]/g)
+          if (levelMatch && levelMatch.length >= 2) {
+            const logLevel = levelMatch[1].toLowerCase()
+            return logLevel === level.toLowerCase()
+          }
+          return false
+        })
+      }
+
+      // 关键词搜索
+      if (keyword) {
+        filteredLines = filteredLines.filter(line => line.includes(keyword))
+      }
+
+      // 限制行数（取最后N行）
+      const resultLines = filteredLines.slice(-limit)
+
+      return {
+        success: true,
+        lines: resultLines,
+        totalLines: filteredLines.length,
+        fileSize: fs.statSync(filePath).size
+      }
+    } catch (error) {
+      log.error('读取日志文件失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 删除日志文件
+  ipcMain.handle('delete-log-file', async (event, filePath) => {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return { success: false, error: '文件不存在' }
+      }
+
+      fs.unlinkSync(filePath)
+      return { success: true }
+    } catch (error) {
+      log.error('删除日志文件失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 清理旧日志文件（保留最近N天）
+  ipcMain.handle('cleanup-log-files', async (event, keepDays = 30) => {
+    try {
+      const logsDir = join(app.getPath('userData'), 'logs')
+      if (!fs.existsSync(logsDir)) {
+        return { success: true, deletedCount: 0 }
+      }
+
+      const files = fs.readdirSync(logsDir)
+        .filter(file => file.endsWith('.log'))
+        .map(file => {
+          const filePath = join(logsDir, file)
+          const stats = fs.statSync(filePath)
+          return { fileName: file, filePath, modifiedTime: stats.mtime.getTime() }
+        })
+
+      const cutoffTime = Date.now() - (keepDays * 24 * 60 * 60 * 1000)
+      let deletedCount = 0
+
+      files.forEach(file => {
+        if (file.modifiedTime < cutoffTime) {
+          try {
+            fs.unlinkSync(file.filePath)
+            deletedCount++
+          } catch (error) {
+            log.error(`删除日志文件失败: ${file.fileName}`, error)
+          }
+        }
+      })
+
+      return { success: true, deletedCount }
+    } catch (error) {
+      log.error('清理日志文件失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 导出日志文件
+  ipcMain.handle('export-log-file', async (event, filePath) => {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return { success: false, error: '文件不存在' }
+      }
+
+      const { filePath: savePath } = await dialog.showSaveDialog(mainWindow, {
+        title: '导出日志文件',
+        defaultPath: filePath.split(/[/\\]/).pop(),
+        filters: [
+          { name: '日志文件', extensions: ['log', 'txt'] }
+        ]
+      })
+
+      if (savePath) {
+        fs.copyFileSync(filePath, savePath)
+        return { success: true, filePath: savePath }
+      } else {
+        return { success: false, error: '用户取消操作' }
+      }
+    } catch (error) {
+      log.error('导出日志文件失败:', error)
       return { success: false, error: error.message }
     }
   })
@@ -248,7 +993,7 @@ app.whenReady().then(() => {
   ipcMain.removeAllListeners('save-processed-excel')
   ipcMain.removeAllListeners('load-config')
   ipcMain.removeAllListeners('save-config')
-  
+
   registerIpcHandlers()
 
   createWindow()

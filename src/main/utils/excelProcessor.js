@@ -33,17 +33,26 @@ class ExcelProcessor {
 
   /**
    * 处理单个工作表
+   * @param {Array} sheetData - 工作表数据
+   * @param {String} sheetName - 工作表名称
+   * @param {Object} authChecker - 检查器实例
+   * @param {Object} historicalCheck - 历史检查记录（30天前的检查）
+   * @param {Number} currentCheckTime - 当前检查时间戳（毫秒）
    */
-  static processSheet(sheetData, sheetName, authChecker) {
-    const results = authChecker.checkAll(sheetData, sheetName);
+  static processSheet(sheetData, sheetName, authChecker, historicalCheck, currentCheckTime) {
+    const results = authChecker.checkAll(sheetData, sheetName, historicalCheck, currentCheckTime);
     
-    // 添加删除标记列
+    // 添加删除标记列（确保只添加一次）
     const processedData = sheetData.map((record, index) => {
       const result = results[index];
-      return {
-        ...record,
-        '删除标记': result.shouldDelete ? '删除' : ''
-      };
+      // 创建新对象，避免修改原对象
+      const newRecord = { ...record };
+      // 删除可能存在的旧标记列
+      delete newRecord['删除标记'];
+      delete newRecord['__EMPTY'];
+      // 添加删除标记
+      newRecord['删除标记'] = result.shouldDelete ? '删除' : '';
+      return newRecord;
     });
     
     return {
@@ -56,6 +65,12 @@ class ExcelProcessor {
 
   /**
    * 处理整个Excel文件
+   * @param {String} filePath - 文件路径
+   * @param {Object} authChecker - 检查器实例
+   * @param {Object} options - 选项
+   * @param {Object} options.historicalCheck - 历史检查记录（30天前的检查）
+   * @param {Number} options.currentCheckTime - 当前检查时间戳（毫秒）
+   * @param {Number} options.longTimeDays - 长时间权限天数
    */
   static processExcel(filePath, authChecker, options = {}) {
     const { workbook, sheets } = this.readExcel(filePath);
@@ -67,6 +82,10 @@ class ExcelProcessor {
       byReason: {}
     };
     
+    // 获取检查时间
+    const currentCheckTime = options.currentCheckTime || Date.now();
+    const historicalCheck = options.historicalCheck || null;
+    
     Object.keys(sheets).forEach(sheetName => {
       // 只处理"已授权主机"工作表
       if (!sheetName.includes('已授权主机')) {
@@ -77,7 +96,7 @@ class ExcelProcessor {
       const sheetData = sheets[sheetName];
       summary.totalRecords += sheetData.length;
       
-      const processed = this.processSheet(sheetData, sheetName, authChecker);
+      const processed = this.processSheet(sheetData, sheetName, authChecker, historicalCheck, currentCheckTime);
       processedSheets[sheetName] = processed;
       
       // 统计删除原因
@@ -95,7 +114,8 @@ class ExcelProcessor {
       workbook,
       processedSheets,
       summary,
-      originalSheets: sheets
+      originalSheets: sheets,
+      checkTime: currentCheckTime
     };
   }
 
@@ -108,7 +128,33 @@ class ExcelProcessor {
     // 更新每个工作表的数据
     Object.keys(processedSheets).forEach(sheetName => {
       const processed = processedSheets[sheetName];
-      const worksheet = XLSX.utils.json_to_sheet(processed.processedData);
+      // 清理数据，确保没有重复的删除标记列和空列
+      const cleanData = processed.processedData.map((record, index) => {
+        const cleanRecord = {};
+        const originalRecord = processed.originalData[index];
+        
+        // 先添加所有原始字段（排除可能的删除标记列）
+        if (originalRecord) {
+          Object.keys(originalRecord).forEach(key => {
+            if (key && key !== '删除标记' && !key.startsWith('__EMPTY')) {
+              cleanRecord[key] = record[key];
+            }
+          });
+        } else {
+          // 如果没有原始记录，从当前记录中提取（排除特殊列）
+          Object.keys(record).forEach(key => {
+            if (key && key !== '删除标记' && !key.startsWith('__EMPTY')) {
+              cleanRecord[key] = record[key];
+            }
+          });
+        }
+        
+        // 最后添加删除标记列（确保唯一）
+        cleanRecord['删除标记'] = record['删除标记'] || '';
+        
+        return cleanRecord;
+      });
+      const worksheet = XLSX.utils.json_to_sheet(cleanData);
       workbook.Sheets[sheetName] = worksheet;
     });
     
@@ -132,16 +178,36 @@ class ExcelProcessor {
     
     Object.keys(processedResult.processedSheets).forEach(sheetName => {
       const processed = processedResult.processedSheets[sheetName];
-      const records = processed.results.map((r, index) => ({
-        id: `${sheetName}_${index}`,
-        sheetName,
-        ...r.record,
-        '删除标记': r.shouldDelete ? '删除' : '',
-        '删除原因': r.reasons.join('; '),
-        shouldDelete: r.shouldDelete,
-        reasons: r.reasons,
-        originalIndex: index
-      }));
+      const records = processed.results.map((r, index) => {
+        // 创建完全可序列化的对象
+        const record = {};
+        // 复制原始记录的所有字段（确保都是基本类型）
+        Object.keys(r.record).forEach(key => {
+          const value = r.record[key];
+          // 只保留可序列化的值
+          if (value !== null && value !== undefined) {
+            if (typeof value === 'object' && !Array.isArray(value)) {
+              // 如果是对象，转换为字符串
+              record[key] = JSON.stringify(value);
+            } else {
+              record[key] = value;
+            }
+          } else {
+            record[key] = '';
+          }
+        });
+        
+        return {
+          id: `${sheetName}_${index}`,
+          sheetName,
+          ...record,
+          '删除标记': r.shouldDelete ? '删除' : '',
+          '删除原因': r.reasons.join('; '),
+          shouldDelete: r.shouldDelete,
+          reasons: Array.isArray(r.reasons) ? r.reasons : [],
+          originalIndex: index
+        };
+      });
       
       preview[sheetName] = limit ? records.slice(0, limit) : records;
     });
