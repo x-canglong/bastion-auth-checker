@@ -1,5 +1,5 @@
 appId: com.electron.app
-productName: electron-app
+productName: bastion-auth-checker
 directories:
   buildResources: build
 files:
@@ -11,12 +11,22 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: electron-app
+  executableName: bastion-auth-checker
+  target:
+    - target: nsis
+      arch:
+        - x64
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
+  allowToChangeInstallationDirectory: true
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  runAfterFinish: true
+  menuCategory: false
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
@@ -39,6 +49,6 @@ appImage:
 npmRebuild: false
 publish:
   provider: generic
-  url: https://example.com/auto-updates
+  url: http://115.190.106.118/bastion-auth-checker/updates
 electronDownload:
   mirror: https://npmmirror.com/mirrors/electron/

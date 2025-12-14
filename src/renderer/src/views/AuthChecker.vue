@@ -17,6 +17,9 @@
           <el-button type="warning" :icon="Document" @click="openLogManager">
             日志管理
           </el-button>
+          <el-button type="success" :icon="Refresh" @click="openUpdateDialog">
+            检查更新
+          </el-button>
           <el-button type="primary" :icon="Setting" @click="openConfigDialog">
             规则配置
           </el-button>
@@ -163,9 +166,6 @@
                 <el-icon><View /></el-icon>
                 检查预览
               </span>
-              <div class="table-info">
-                共 {{ currentTableData.length }} 条记录
-              </div>
               <div class="preview-controls">
                 <el-radio-group v-model="previewFilter" size="default">
                   <el-radio-button label="all">
@@ -208,31 +208,6 @@
         </el-card>
       </div>
 
-      <!-- 数据表格 -->
-      <!-- <el-card v-if="result && currentTableData.length > 0" class="table-card" shadow="hover">
-        <template #header>
-          <div class="card-header">
-            <span class="card-title">
-              <el-icon><List /></el-icon>
-              数据详情
-            </span>
-            <div class="table-info">
-              共 {{ currentTableData.length }} 条记录
-            </div>
-          </div>
-        </template>
-        <div class="table-container" v-loading="updating">
-          <el-table-v2
-            :columns="tableColumns"
-            :data="currentTableData"
-            :width="1400"
-            :height="600"
-            fixed
-            :row-class="getRowClassName"
-          />
-        </div>
-      </el-card> -->
-
       <!-- 错误提示 -->
       <el-alert
         v-if="error"
@@ -251,6 +226,12 @@
       :config="config"
       @save="handleConfigSave"
       @load="handleConfigLoad"
+    />
+
+    <!-- 更新对话框 -->
+    <UpdateDialog
+      ref="updateDialogRef"
+      v-model="updateDialogVisible"
     />
 
     <!-- 历史文件管理对话框 -->
@@ -277,9 +258,11 @@ import {
   List,
   View,
   Download,
-  Folder
+  Folder,
+  Refresh
 } from '@element-plus/icons-vue'
 import ConfigDialog from './components/ConfigDialog.vue'
+import UpdateDialog from './components/UpdateDialog.vue'
 
 const selectedFile = ref('')
 const processing = ref(false)
@@ -287,6 +270,8 @@ const updating = ref(false)
 const result = ref(null)
 const error = ref('')
 const configDialogVisible = ref(false)
+const updateDialogVisible = ref(false)
+const updateDialogRef = ref(null)
 const activeSheetTab = ref('')
 const cacheKey = ref('')
 const previewFilter = ref('marked')
@@ -356,6 +341,16 @@ const openHistoryManager = () => {
 
 const openLogManager = () => {
   emit('open-log-manager')
+}
+
+const openUpdateDialog = () => {
+  updateDialogVisible.value = true
+  // 延迟一下确保对话框已挂载
+  setTimeout(() => {
+    if (updateDialogRef.value && updateDialogRef.value.checkForUpdates) {
+      updateDialogRef.value.checkForUpdates()
+    }
+  }, 100)
 }
 
 const handleConfigSave = async (configObj) => {

@@ -25,9 +25,55 @@
         stripe
         border
         style="width: 100%"
-        max-height="500"
+        max-height="600"
+        :row-class-name="getRowClassName"
       >
-        <el-table-column prop="fileName" label="文件名" min-width="200" show-overflow-tooltip />
+        <el-table-column type="expand">
+          <template #default="{ row }">
+            <div v-if="row.summary" class="check-result-detail">
+              <el-descriptions :column="2" border size="small">
+                <el-descriptions-item label="总工作表数">
+                  <el-tag type="info">{{ row.summary.totalSheets || 0 }}</el-tag>
+                </el-descriptions-item>
+                <el-descriptions-item label="总记录数">
+                  <el-tag type="primary">{{ row.summary.totalRecords || 0 }}</el-tag>
+                </el-descriptions-item>
+                <el-descriptions-item label="标记删除数">
+                  <el-tag type="danger">{{ row.summary.markedForDeletion || 0 }}</el-tag>
+                </el-descriptions-item>
+                <el-descriptions-item label="正常记录数">
+                  <el-tag type="success">{{ row.summary.normalRecords || 0 }}</el-tag>
+                </el-descriptions-item>
+              </el-descriptions>
+              <div v-if="row.summary.byReason && Object.keys(row.summary.byReason).length > 0" class="delete-reasons">
+                <h4>删除原因统计：</h4>
+                <div class="reason-tags">
+                  <el-tag
+                    v-for="(count, reason) in row.summary.byReason"
+                    :key="reason"
+                    type="warning"
+                    size="small"
+                    style="margin: 4px"
+                  >
+                    {{ reason }}: {{ count }}
+                  </el-tag>
+                </div>
+              </div>
+              <div v-else class="no-reasons">
+                <el-text type="info">无删除原因统计</el-text>
+              </div>
+            </div>
+            <div v-else class="no-summary">
+              <el-text type="info">该历史文件无检查结果记录</el-text>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="fileName" label="文件名" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">
+            <el-icon style="margin-right: 5px; color: #409eff"><Document /></el-icon>
+            {{ row.fileName }}
+          </template>
+        </el-table-column>
         <el-table-column prop="fileHash" label="文件Hash" width="120">
           <template #default="{ row }">
             <el-text truncated style="max-width: 120px">{{ row.fileHash.substring(0, 8) }}...</el-text>
@@ -36,6 +82,29 @@
         <el-table-column prop="timestamp" label="检查时间" width="180">
           <template #default="{ row }">
             {{ formatTimestamp(row.timestamp) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="检查结果" width="200">
+          <template #default="{ row }">
+            <div v-if="row.summary" class="check-result-summary">
+              <div class="summary-row">
+                <span class="summary-label">工作表:</span>
+                <el-tag type="info" size="small">{{ row.summary.totalSheets || 0 }}</el-tag>
+              </div>
+              <div class="summary-row">
+                <span class="summary-label">记录:</span>
+                <el-tag type="primary" size="small">{{ row.summary.totalRecords || 0 }}</el-tag>
+              </div>
+              <div class="summary-row">
+                <span class="summary-label">删除:</span>
+                <el-tag type="danger" size="small">{{ row.summary.markedForDeletion || 0 }}</el-tag>
+              </div>
+              <div class="summary-row">
+                <span class="summary-label">正常:</span>
+                <el-tag type="success" size="small">{{ row.summary.normalRecords || 0 }}</el-tag>
+              </div>
+            </div>
+            <el-text v-else type="info" size="small">无记录</el-text>
           </template>
         </el-table-column>
         <el-table-column prop="fileSize" label="文件大小" width="100">
@@ -77,7 +146,7 @@
 <script setup>
 import { ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Delete } from '@element-plus/icons-vue'
+import { Refresh, Delete, Document } from '@element-plus/icons-vue'
 
 const props = defineProps({
   modelValue: {
@@ -214,6 +283,13 @@ const cleanupInvalidFiles = async () => {
 const handleClose = () => {
   dialogVisible.value = false
 }
+
+const getRowClassName = ({ row }) => {
+  if (row.summary && row.summary.markedForDeletion > 0) {
+    return 'has-deletion-row'
+  }
+  return ''
+}
 </script>
 
 <style lang="stylus" scoped>
@@ -230,5 +306,48 @@ const handleClose = () => {
     margin-left auto
     color #666
     font-size 14px
+
+.check-result-detail
+  padding 15px
+  background #f8f9fa
+
+  .delete-reasons
+    margin-top 15px
+
+    h4
+      margin 0 0 10px 0
+      font-size 14px
+      color #333
+
+    .reason-tags
+      display flex
+      flex-wrap wrap
+      gap 8px
+
+  .no-reasons, .no-summary
+    padding 10px
+    text-align center
+    color #999
+
+.check-result-summary
+  display flex
+  flex-direction column
+  gap 4px
+
+  .summary-row
+    display flex
+    align-items center
+    gap 6px
+    font-size 12px
+
+    .summary-label
+      color #666
+      min-width 40px
+
+:deep(.has-deletion-row)
+  background-color #fef0f0
+
+  &:hover
+    background-color #fde2e2
 </style>
 

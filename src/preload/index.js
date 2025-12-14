@@ -7,7 +7,11 @@ const extendedElectronAPI = {
   ipcRenderer: {
     invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
     send: (channel, ...args) => ipcRenderer.send(channel, ...args),
-    on: (channel, func) => ipcRenderer.on(channel, func),
+    on: (channel, func) => {
+      ipcRenderer.on(channel, func)
+      // 返回清理函数
+      return () => ipcRenderer.removeListener(channel, func)
+    },
     removeListener: (channel, func) => ipcRenderer.removeListener(channel, func)
   }
 }

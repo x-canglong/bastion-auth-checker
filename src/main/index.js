@@ -1,6 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { autoUpdater } from 'electron-updater'
 import icon from '../../resources/icon.png?asset'
 import AuthChecker from './utils/authChecker'
 import ExcelProcessor from './utils/excelProcessor'
@@ -177,6 +178,42 @@ const getHistoricalCheck = (fileHash, currentTime, longTimeDays) => {
   return null
 }
 
+// 检查历史文件索引一致性
+const checkHistoryIndexConsistency = () => {
+  try {
+    const historyIndex = loadCheckHistoryIndex()
+    let cleanedCount = 0
+    let hasChanges = false
+
+    Object.keys(historyIndex).forEach(fileHash => {
+      const originalLength = historyIndex[fileHash].length
+      historyIndex[fileHash] = historyIndex[fileHash].filter(check => {
+        if (check.filePath && fs.existsSync(check.filePath)) {
+          return true
+        } else {
+          cleanedCount++
+          return false
+        }
+      })
+      if (historyIndex[fileHash].length === 0) {
+        delete historyIndex[fileHash]
+        hasChanges = true
+      } else if (historyIndex[fileHash].length < originalLength) {
+        hasChanges = true
+      }
+    })
+
+    if (hasChanges) {
+      saveCheckHistoryIndex(historyIndex)
+      if (cleanedCount > 0) {
+        log.info(`启动时清理了 ${cleanedCount} 个无效的历史文件记录`)
+      }
+    }
+  } catch (error) {
+    log.error('检查历史文件索引一致性失败:', error)
+  }
+}
+
 // 注册所有IPC handlers（在应用启动时就注册，避免HMR问题）
 function registerIpcHandlers() {
   // Excel文件选择对话框
@@ -340,14 +377,21 @@ function registerIpcHandlers() {
         })
       })
 
-      // 添加当前文件记录
+      // 添加当前文件记录（包含检查结果摘要）
       if (!historyIndex[fileHash]) {
         historyIndex[fileHash] = []
       }
       historyIndex[fileHash].push({
         timestamp: currentCheckTime,
         filePath: historyFilePath,
-        originalFileName: originalFileName // 保存原始文件名
+        originalFileName: originalFileName, // 保存原始文件名
+        summary: {
+          totalSheets: result.summary.totalSheets || 0,
+          totalRecords: result.summary.totalRecords || 0,
+          markedForDeletion: result.summary.markedForDeletion || 0,
+          normalRecords: (result.summary.totalRecords || 0) - (result.summary.markedForDeletion || 0),
+          byReason: result.summary.byReason || {}
+        }
       })
       allHistoryFiles.push({
         hash: fileHash,
@@ -592,7 +636,8 @@ function registerIpcHandlers() {
             filePath,
             timestamp: check.timestamp,
             fileSize,
-            exists
+            exists,
+            summary: check.summary || null // 检查结果摘要
           })
         })
       })
@@ -934,6 +979,119 @@ function registerIpcHandlers() {
   })
 }
 
+// 注册更新相关的IPC handlers
+function registerUpdateHandlers() {
+  // 检查更新
+  ipcMain.handle('check-for-updates', async () => {
+    try {
+      if (isDev) {
+        return { success: false, error: '开发环境不支持更新检查' }
+      }
+      const result = await autoUpdater.checkForUpdates()
+      return {
+        success: true,
+        updateInfo: result ? {
+          version: result.updateInfo.version,
+          releaseDate: result.updateInfo.releaseDate,
+          releaseNotes: result.updateInfo.releaseNotes
+        } : null
+      }
+    } catch (error) {
+      log.error('检查更新失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 下载更新
+  ipcMain.handle('download-update', async () => {
+    try {
+      if (isDev) {
+        return { success: false, error: '开发环境不支持更新下载' }
+      }
+      await autoUpdater.downloadUpdate()
+      return { success: true }
+    } catch (error) {
+      log.error('下载更新失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 安装更新
+  ipcMain.handle('quit-and-install', () => {
+    try {
+      autoUpdater.quitAndInstall(false, true)
+      return { success: true }
+    } catch (error) {
+      log.error('安装更新失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 获取当前版本
+  ipcMain.handle('get-app-version', () => {
+    return { version: app.getVersion() }
+  })
+
+  // 监听更新事件
+  autoUpdater.on('checking-for-update', () => {
+    log.info('正在检查更新...')
+    if (mainWindow) {
+      mainWindow.webContents.send('update-checking')
+    }
+  })
+
+  autoUpdater.on('update-available', (info) => {
+    log.info('发现新版本:', info.version)
+    if (mainWindow) {
+      mainWindow.webContents.send('update-available', {
+        version: info.version,
+        releaseDate: info.releaseDate,
+        releaseNotes: info.releaseNotes
+      })
+    }
+  })
+
+  autoUpdater.on('update-not-available', (info) => {
+    log.info('当前已是最新版本:', info.version)
+    if (mainWindow) {
+      mainWindow.webContents.send('update-not-available', {
+        version: info.version
+      })
+    }
+  })
+
+  autoUpdater.on('error', (error) => {
+    log.error('更新错误:', error)
+    if (mainWindow) {
+      mainWindow.webContents.send('update-error', {
+        message: error.message
+      })
+    }
+  })
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    if (mainWindow) {
+      mainWindow.webContents.send('update-download-progress', {
+        percent: progressObj.percent,
+        transferred: progressObj.transferred,
+        total: progressObj.total,
+        bytesPerSecond: progressObj.bytesPerSecond
+      })
+    }
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    log.info('更新下载完成:', info.version)
+    if (mainWindow) {
+      mainWindow.webContents.send('update-downloaded', {
+        version: info.version,
+        releaseDate: info.releaseDate,
+        releaseNotes: info.releaseNotes
+      })
+    }
+  })
+}
+
 function createWindow() {
   // Create the browser window.
   mainWindow = new BrowserWindow({
@@ -968,6 +1126,18 @@ function createWindow() {
   }
 }
 
+// 配置自动更新（在app.whenReady之前）
+if (!isDev) {
+  autoUpdater.setFeedURL({
+    provider: 'generic',
+    url: 'http://115.190.106.118/bastion-auth-checker/updates'
+  })
+
+  // 禁用自动下载，手动控制
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = true
+}
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
@@ -996,7 +1166,22 @@ app.whenReady().then(() => {
 
   registerIpcHandlers()
 
+  // 注册更新相关的IPC handlers
+  registerUpdateHandlers()
+
+  // 启动时检查历史文件索引一致性
+  checkHistoryIndexConsistency()
+
   createWindow()
+
+  // 如果不是开发环境，启动后检查更新
+  if (!isDev) {
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(err => {
+        log.error('检查更新失败:', err)
+      })
+    }, 3000)
+  }
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
