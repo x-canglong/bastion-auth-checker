@@ -66,6 +66,8 @@ let mainWindow = null
 
 // 存储处理结果（用于更新删除标记）- 移到外部避免每次重新创建
 const processedResultsCache = new Map()
+// 存储 cacheKey 到结果文件路径的映射
+const cacheKeyToResultPath = new Map()
 
 // 检查历史索引文件路径
 const getCheckHistoryIndexPath = () => {
@@ -409,7 +411,9 @@ function registerIpcHandlers() {
         const filesToDelete = allHistoryFiles.slice(0, allHistoryFiles.length - maxHistoryFiles)
         filesToDelete.forEach(file => {
           // 从索引中删除
+          let deletedCheck = null
           if (historyIndex[file.hash]) {
+            deletedCheck = historyIndex[file.hash].find(check => check.filePath === file.filePath)
             historyIndex[file.hash] = historyIndex[file.hash].filter(
               check => check.filePath !== file.filePath
             )
@@ -428,6 +432,16 @@ function registerIpcHandlers() {
               log.error('删除历史文件失败:', error)
             }
           }
+          
+          // 删除对应的结果文件
+          if (deletedCheck && deletedCheck.resultFilePath && fs.existsSync(deletedCheck.resultFilePath)) {
+            try {
+              fs.unlinkSync(deletedCheck.resultFilePath)
+              log.info('已删除对应的检查结果文件:', deletedCheck.resultFilePath)
+            } catch (error) {
+              log.error('删除检查结果文件失败:', error)
+            }
+          }
         })
       }
 
@@ -435,9 +449,36 @@ function registerIpcHandlers() {
 
       event.sender.send('process-progress', { stage: 'complete', message: '处理完成' })
 
-      // 缓存处理结果
+      // 缓存处理结果（添加 filePath 和 checkTime 到 result 对象）
       const cacheKey = `${filePath}_${currentCheckTime}`
+      result.filePath = filePath
+      result.checkTime = currentCheckTime
+      result.historicalCheckTime = processedHistoricalCheck ? processedHistoricalCheck.timestamp : null
       processedResultsCache.set(cacheKey, result)
+
+      // 自动保存检查结果到历史目录
+      try {
+        const historyFilesDir = getHistoryFilesDir()
+        const timeStr = formatTimestamp(currentCheckTime)
+        const originalFileName = filePath.split(/[/\\]/).pop().replace(/\.xlsx?$/, '')
+        const resultFileName = `${fileHash}_${timeStr}_检查结果.xlsx`
+        const resultFilePath = join(historyFilesDir, resultFileName)
+        
+        ExcelProcessor.saveExcel(result, resultFilePath)
+        log.info('已自动保存检查结果到历史目录:', resultFilePath)
+        
+        // 存储 cacheKey 到结果文件路径的映射
+        cacheKeyToResultPath.set(cacheKey, resultFilePath)
+        
+        // 更新历史索引，添加结果文件路径
+        const currentCheckRecord = historyIndex[fileHash].find(check => check.timestamp === currentCheckTime)
+        if (currentCheckRecord) {
+          currentCheckRecord.resultFilePath = resultFilePath
+          saveCheckHistoryIndex(historyIndex)
+        }
+      } catch (error) {
+        log.error('自动保存检查结果失败:', error)
+      }
 
       // 返回可序列化的对象（不包含workbook等不可序列化的对象）
       return {
@@ -464,6 +505,40 @@ function registerIpcHandlers() {
     }
   })
 
+  // 获取缓存的处理结果
+  ipcMain.handle('get-cached-result', async (event, cacheKey) => {
+    try {
+      const result = processedResultsCache.get(cacheKey)
+      if (!result) {
+        return {
+          success: false,
+          error: '处理结果已过期'
+        }
+      }
+
+      const preview = ExcelProcessor.generatePreview(result)
+
+      return {
+        success: true,
+        summary: {
+          totalSheets: result.summary.totalSheets || 0,
+          totalRecords: result.summary.totalRecords || 0,
+          markedForDeletion: result.summary.markedForDeletion || 0,
+          byReason: result.summary.byReason || {}
+        },
+        preview,
+        filePath: result.filePath || '',
+        checkTime: result.checkTime || null,
+        historicalCheckTime: result.historicalCheckTime || null
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      }
+    }
+  })
+
   // 更新删除标记
   ipcMain.handle('update-delete-mark', async (event, cacheKey, sheetName, recordIndex, shouldDelete) => {
     try {
@@ -477,6 +552,17 @@ function registerIpcHandlers() {
 
       const updatedResult = ExcelProcessor.updateDeleteMark(result, sheetName, recordIndex, shouldDelete)
       const preview = ExcelProcessor.generatePreview(updatedResult)
+
+      // 更新保存的检查结果文件
+      const resultFilePath = cacheKeyToResultPath.get(cacheKey)
+      if (resultFilePath && fs.existsSync(resultFilePath)) {
+        try {
+          ExcelProcessor.saveExcel(updatedResult, resultFilePath)
+          log.info('已更新检查结果文件:', resultFilePath)
+        } catch (error) {
+          log.error('更新检查结果文件失败:', error)
+        }
+      }
 
       return {
         success: true,
@@ -705,9 +791,14 @@ function registerIpcHandlers() {
       // 从索引中删除
       const historyIndex = loadCheckHistoryIndex()
       let deleted = false
+      let resultFilePath = null
 
       Object.keys(historyIndex).forEach(fileHash => {
         const originalLength = historyIndex[fileHash].length
+        const deletedCheck = historyIndex[fileHash].find(check => check.filePath === filePath)
+        if (deletedCheck && deletedCheck.resultFilePath) {
+          resultFilePath = deletedCheck.resultFilePath
+        }
         historyIndex[fileHash] = historyIndex[fileHash].filter(
           check => check.filePath !== filePath
         )
@@ -722,6 +813,17 @@ function registerIpcHandlers() {
       if (deleted) {
         // 删除物理文件
         fs.unlinkSync(filePath)
+        
+        // 删除对应的结果文件
+        if (resultFilePath && fs.existsSync(resultFilePath)) {
+          try {
+            fs.unlinkSync(resultFilePath)
+            log.info('已删除对应的检查结果文件:', resultFilePath)
+          } catch (error) {
+            log.error('删除检查结果文件失败:', error)
+          }
+        }
+        
         saveCheckHistoryIndex(historyIndex)
         log.info('已删除历史文件:', filePath)
         return { success: true }

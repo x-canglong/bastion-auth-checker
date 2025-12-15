@@ -256,7 +256,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed, h } from 'vue'
+import { ref, reactive, onMounted, computed, h, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ElTag, ElSwitch } from 'element-plus'
 
@@ -299,6 +299,111 @@ const cacheKey = ref('')
 const previewFilter = ref('marked')
 const progressMessage = ref('')
 const progressPercentage = ref(0)
+
+// 状态持久化的 key
+const STORAGE_KEY = 'auth-checker-state'
+// 标志：是否正在恢复状态（避免恢复时触发保存）
+const isRestoring = ref(false)
+
+// 保存状态到 localStorage
+const saveState = () => {
+  // 如果正在恢复状态，不保存
+  if (isRestoring.value) return
+  
+  try {
+    const state = {
+      selectedFile: selectedFile.value,
+      cacheKey: cacheKey.value,
+      activeSheetTab: activeSheetTab.value,
+      previewFilter: previewFilter.value,
+      result: result.value ? {
+        summary: result.value.summary,
+        preview: result.value.preview,
+        filePath: result.value.filePath,
+        checkTime: result.value.checkTime,
+        historicalCheckTime: result.value.historicalCheckTime
+      } : null
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+  } catch (err) {
+    console.error('保存状态失败:', err)
+  }
+}
+
+// 从 localStorage 恢复状态
+const restoreState = async () => {
+  try {
+    isRestoring.value = true
+    
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (!saved) {
+      isRestoring.value = false
+      return
+    }
+
+    const state = JSON.parse(saved)
+    
+    if (state.selectedFile) {
+      selectedFile.value = state.selectedFile
+    }
+    
+    if (state.cacheKey) {
+      cacheKey.value = state.cacheKey
+    }
+    
+    if (state.activeSheetTab) {
+      activeSheetTab.value = state.activeSheetTab
+    }
+    
+    if (state.previewFilter) {
+      previewFilter.value = state.previewFilter
+    }
+    
+    // 恢复检查结果（如果有）
+    if (state.result && state.cacheKey) {
+      // 验证 cacheKey 是否仍然有效
+      if (checkIPC()) {
+        try {
+          // 尝试从缓存中获取结果
+          const cachedResult = await window.electron.ipcRenderer.invoke('get-cached-result', state.cacheKey)
+          if (cachedResult && cachedResult.success) {
+            result.value = {
+              summary: cachedResult.summary,
+              preview: cachedResult.preview,
+              filePath: cachedResult.filePath,
+              checkTime: cachedResult.checkTime,
+              historicalCheckTime: cachedResult.historicalCheckTime
+            }
+            cacheKey.value = state.cacheKey
+            ElMessage.success('已恢复之前的检查结果')
+          } else {
+            // 缓存已过期，清除保存的状态
+            localStorage.removeItem(STORAGE_KEY)
+            selectedFile.value = state.selectedFile || ''
+            result.value = null
+            cacheKey.value = ''
+          }
+        } catch (err) {
+          console.error('恢复检查结果失败:', err)
+          // 缓存已过期，清除保存的状态
+          localStorage.removeItem(STORAGE_KEY)
+          selectedFile.value = state.selectedFile || ''
+          result.value = null
+          cacheKey.value = ''
+        }
+      }
+    }
+  } catch (err) {
+    console.error('恢复状态失败:', err)
+  } finally {
+    isRestoring.value = false
+  }
+}
+
+// 监听关键状态变化并保存
+watch([selectedFile, cacheKey, activeSheetTab, previewFilter, result], () => {
+  saveState()
+}, { deep: true })
 
 const config = reactive({
   opsPersonnelText: '王礼鑫\n王鹏辉\n杨志智\n张涛',
@@ -431,6 +536,13 @@ const handleConfigSave = async (configObj) => {
       config.longTimeDays = serializableConfig.longTimeDays
 
       ElMessage.success('配置已保存')
+      
+      // 如果有检查预览，使用新规则重新检查
+      if (result.value && selectedFile.value && !processing.value) {
+        ElMessage.info('配置已更新，正在使用新规则重新检查...')
+        await processFile()
+      }
+      
       return true
     } else {
       error.value = '保存配置失败: ' + saveResult.error
@@ -740,9 +852,12 @@ const saveResult = async () => {
 }
 
 onMounted(() => {
-  setTimeout(() => {
+  setTimeout(async () => {
     if (window.electron && window.electron.ipcRenderer) {
       handleConfigLoad()
+      
+      // 恢复之前保存的状态
+      await restoreState()
       
       // 监听显示更新对话框事件（启动时自动检查更新）
       window.electron.ipcRenderer.on('show-update-dialog', () => {
