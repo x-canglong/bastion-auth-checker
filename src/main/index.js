@@ -859,6 +859,7 @@ function registerIpcHandlers() {
   ipcMain.handle('read-log-file', async (event, filePath, options = {}) => {
     try {
       if (!fs.existsSync(filePath)) {
+        log.error('文件不存在:', filePath)
         return { success: false, error: '文件不存在' }
       }
 
@@ -979,22 +980,59 @@ function registerIpcHandlers() {
   })
 }
 
+// 版本比较函数：比较两个版本号，返回 true 表示 remoteVersion > currentVersion
+function compareVersions(currentVersion, remoteVersion) {
+  const current = currentVersion.split('.').map(Number)
+  const remote = remoteVersion.split('.').map(Number)
+  
+  const maxLength = Math.max(current.length, remote.length)
+  
+  for (let i = 0; i < maxLength; i++) {
+    const currentPart = current[i] || 0
+    const remotePart = remote[i] || 0
+    
+    if (remotePart > currentPart) {
+      return true
+    } else if (remotePart < currentPart) {
+      return false
+    }
+  }
+  
+  return false // 版本相同
+}
+
 // 注册更新相关的IPC handlers
 function registerUpdateHandlers() {
   // 检查更新
   ipcMain.handle('check-for-updates', async () => {
     try {
       if (isDev) {
-        return { success: false, error: '开发环境不支持更新检查' }
+        // return { success: false, error: '开发环境不支持更新检查' }
       }
       const result = await autoUpdater.checkForUpdates()
+      if (result && result.updateInfo) {
+        const currentVersion = app.getVersion()
+        const remoteVersion = result.updateInfo.version
+        // 只有当远程版本大于当前版本时才返回更新信息
+        if (compareVersions(currentVersion, remoteVersion)) {
+          return {
+            success: true,
+            updateInfo: {
+              version: remoteVersion,
+              releaseDate: result.updateInfo.releaseDate,
+              releaseNotes: result.updateInfo.releaseNotes
+            }
+          }
+        } else {
+          return {
+            success: true,
+            updateInfo: null
+          }
+        }
+      }
       return {
         success: true,
-        updateInfo: result ? {
-          version: result.updateInfo.version,
-          releaseDate: result.updateInfo.releaseDate,
-          releaseNotes: result.updateInfo.releaseNotes
-        } : null
+        updateInfo: null
       }
     } catch (error) {
       log.error('检查更新失败:', error)
@@ -1008,10 +1046,12 @@ function registerUpdateHandlers() {
       if (isDev) {
         return { success: false, error: '开发环境不支持更新下载' }
       }
+      isDownloadingUpdate = true
       await autoUpdater.downloadUpdate()
       return { success: true }
     } catch (error) {
       log.error('下载更新失败:', error)
+      isDownloadingUpdate = false
       return { success: false, error: error.message }
     }
   })
@@ -1041,13 +1081,30 @@ function registerUpdateHandlers() {
   })
 
   autoUpdater.on('update-available', (info) => {
-    log.info('发现新版本:', info.version)
-    if (mainWindow) {
-      mainWindow.webContents.send('update-available', {
-        version: info.version,
-        releaseDate: info.releaseDate,
-        releaseNotes: info.releaseNotes
-      })
+    const currentVersion = app.getVersion()
+    const remoteVersion = info.version
+    
+    log.info('检查到远程版本:', remoteVersion, '当前版本:', currentVersion)
+    
+    // 只有当远程版本大于当前版本时才发送更新信息
+    if (compareVersions(currentVersion, remoteVersion)) {
+      log.info('发现新版本:', remoteVersion)
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update-available', {
+          version: remoteVersion,
+          releaseDate: info.releaseDate,
+          releaseNotes: info.releaseNotes
+        })
+        // 自动显示更新对话框（用户可以选择是否更新）
+        mainWindow.webContents.send('show-update-dialog')
+      }
+    } else {
+      log.info('版本相同或更旧，不提示更新')
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update-not-available', {
+          version: currentVersion
+        })
+      }
     }
   })
 
@@ -1069,24 +1126,37 @@ function registerUpdateHandlers() {
     }
   })
 
+
+  autoUpdater.on('update-downloaded', (info) => {
+    log.info('更新下载完成:', info.version)
+    isDownloadingUpdate = false
+    updateDownloaded = true
+    
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-downloaded', {
+        version: info.version,
+        releaseDate: info.releaseDate,
+        releaseNotes: info.releaseNotes
+      })
+    }
+    
+    // 如果之前有挂起的退出请求，现在可以退出了
+    if (pendingQuit) {
+      log.info('更新下载完成，应用将退出')
+      setTimeout(() => {
+        app.quit()
+      }, 1000)
+    }
+  })
+  
   autoUpdater.on('download-progress', (progressObj) => {
-    if (mainWindow) {
+    isDownloadingUpdate = true
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-download-progress', {
         percent: progressObj.percent,
         transferred: progressObj.transferred,
         total: progressObj.total,
         bytesPerSecond: progressObj.bytesPerSecond
-      })
-    }
-  })
-
-  autoUpdater.on('update-downloaded', (info) => {
-    log.info('更新下载完成:', info.version)
-    if (mainWindow) {
-      mainWindow.webContents.send('update-downloaded', {
-        version: info.version,
-        releaseDate: info.releaseDate,
-        releaseNotes: info.releaseNotes
       })
     }
   })
@@ -1128,9 +1198,19 @@ function createWindow() {
 
 // 配置自动更新（在app.whenReady之前）
 if (!isDev) {
+  // 根据平台设置不同的更新服务器地址
+  const platform = process.platform
+  let updateUrl = 'http://115.190.106.118/bastion-auth-checker/updates'
+  
+  if (platform === 'win32') {
+    updateUrl = 'http://115.190.106.118/bastion-auth-checker/updates/win'
+  } else if (platform === 'linux') {
+    updateUrl = 'http://115.190.106.118/bastion-auth-checker/updates/linux'
+  }
+  
   autoUpdater.setFeedURL({
     provider: 'generic',
-    url: 'http://115.190.106.118/bastion-auth-checker/updates'
+    url: updateUrl
   })
 
   // 禁用自动下载，手动控制
@@ -1174,7 +1254,7 @@ app.whenReady().then(() => {
 
   createWindow()
 
-  // 如果不是开发环境，启动后检查更新
+  // 如果不是开发环境，启动后检查更新（不强制更新）
   if (!isDev) {
     setTimeout(() => {
       autoUpdater.checkForUpdates().catch(err => {
@@ -1182,6 +1262,9 @@ app.whenReady().then(() => {
       })
     }, 3000)
   }
+  
+  // 检查是否有待安装的更新
+  checkPendingUpdate()
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
@@ -1190,12 +1273,81 @@ app.whenReady().then(() => {
   })
 })
 
+// 更新下载状态
+let isDownloadingUpdate = false
+let updateDownloaded = false
+let pendingQuit = false
+
+// 检查是否有待安装的更新
+function checkPendingUpdate() {
+  if (!isDev && autoUpdater) {
+    // electron-updater 会自动检查是否有已下载的更新
+    // 如果有，会在下次启动时自动安装（因为 autoInstallOnAppQuit = true）
+  }
+}
+
+// 后台下载更新
+async function downloadUpdateInBackground() {
+  if (isDev || isDownloadingUpdate) return
+  
+  try {
+    log.info('开始后台检查更新...')
+    const result = await autoUpdater.checkForUpdates()
+    if (result && result.updateInfo) {
+      const currentVersion = app.getVersion()
+      const remoteVersion = result.updateInfo.version
+      
+      if (compareVersions(currentVersion, remoteVersion)) {
+        log.info('发现新版本，开始后台下载:', remoteVersion)
+        isDownloadingUpdate = true
+        await autoUpdater.downloadUpdate()
+        log.info('后台下载完成')
+        updateDownloaded = true
+      }
+    }
+  } catch (error) {
+    log.error('后台下载更新失败:', error)
+  } finally {
+    isDownloadingUpdate = false
+  }
+}
+
 // Quit when all windows are closed, except on macOS. There, it's common
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
-app.on('window-all-closed', () => {
+app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') {
+    // 如果正在下载更新，等待下载完成
+    if (isDownloadingUpdate) {
+      log.info('正在下载更新，等待下载完成...')
+      pendingQuit = true
+      // 不立即退出，等待下载完成
+      return
+    }
+    
+    // 如果没有下载更新，检查是否有更新需要下载
+    if (!isDev && !updateDownloaded) {
+      log.info('窗口关闭，检查是否有更新需要下载...')
+      // 延迟一下，确保窗口已关闭
+      setTimeout(async () => {
+        await downloadUpdateInBackground()
+        if (pendingQuit) {
+          app.quit()
+        }
+      }, 500)
+      return
+    }
+    
     app.quit()
+  }
+})
+
+// 阻止应用关闭，如果正在下载更新
+app.on('before-quit', (event) => {
+  if (isDownloadingUpdate && !isDev) {
+    event.preventDefault()
+    log.info('正在下载更新，阻止应用关闭')
+    pendingQuit = true
   }
 })
 

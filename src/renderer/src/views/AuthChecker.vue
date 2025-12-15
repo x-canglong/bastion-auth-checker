@@ -17,7 +17,12 @@
           <el-button type="warning" :icon="Document" @click="openLogManager">
             日志管理
           </el-button>
-          <el-button type="success" :icon="Refresh" @click="openUpdateDialog">
+          <el-button 
+            type="success" 
+            :icon="Refresh" 
+            @click="openUpdateDialog"
+            :disabled="hasUpdateAvailable"
+          >
             检查更新
           </el-button>
           <el-button type="primary" :icon="Setting" @click="openConfigDialog">
@@ -232,6 +237,17 @@
     <UpdateDialog
       ref="updateDialogRef"
       v-model="updateDialogVisible"
+      @minimize="handleUpdateMinimize"
+    />
+
+    <!-- 更新进度指示器（角落图标） -->
+    <UpdateProgressIndicator
+      v-if="showUpdateIndicator"
+      :visible="showUpdateIndicator"
+      :progress="updateProgress"
+      :is-downloading="isUpdating"
+      :has-update="updateDownloaded"
+      @click="handleUpdateIndicatorClick"
     />
 
     <!-- 历史文件管理对话框 -->
@@ -263,6 +279,7 @@ import {
 } from '@element-plus/icons-vue'
 import ConfigDialog from './components/ConfigDialog.vue'
 import UpdateDialog from './components/UpdateDialog.vue'
+import UpdateProgressIndicator from './components/UpdateProgressIndicator.vue'
 
 const selectedFile = ref('')
 const processing = ref(false)
@@ -272,6 +289,11 @@ const error = ref('')
 const configDialogVisible = ref(false)
 const updateDialogVisible = ref(false)
 const updateDialogRef = ref(null)
+const hasUpdateAvailable = ref(false)
+const showUpdateIndicator = ref(false)
+const updateProgress = ref(0)
+const isUpdating = ref(false)
+const updateDownloaded = ref(false)
 const activeSheetTab = ref('')
 const cacheKey = ref('')
 const previewFilter = ref('marked')
@@ -345,12 +367,35 @@ const openLogManager = () => {
 
 const openUpdateDialog = () => {
   updateDialogVisible.value = true
+  showUpdateIndicator.value = false
   // 延迟一下确保对话框已挂载
   setTimeout(() => {
     if (updateDialogRef.value && updateDialogRef.value.checkForUpdates) {
       updateDialogRef.value.checkForUpdates()
     }
   }, 100)
+}
+
+const handleUpdateMinimize = (minimized) => {
+  if (minimized) {
+    // 最小化时显示进度指示器
+    showUpdateIndicator.value = true
+    // 确保对话框已关闭（隐藏模态层）
+    updateDialogVisible.value = false
+  } else {
+    // 展开时隐藏进度指示器
+    showUpdateIndicator.value = false
+  }
+}
+
+const handleUpdateIndicatorClick = () => {
+  // 点击进度指示器时重新打开对话框
+  updateDialogVisible.value = true
+  showUpdateIndicator.value = false
+  // 通知对话框取消最小化状态
+  if (updateDialogRef.value) {
+    updateDialogRef.value.isMinimized = false
+  }
 }
 
 const handleConfigSave = async (configObj) => {
@@ -698,6 +743,37 @@ onMounted(() => {
   setTimeout(() => {
     if (window.electron && window.electron.ipcRenderer) {
       handleConfigLoad()
+      
+      // 监听显示更新对话框事件（启动时自动检查更新）
+      window.electron.ipcRenderer.on('show-update-dialog', () => {
+        updateDialogVisible.value = true
+        hasUpdateAvailable.value = true
+      })
+      
+      // 监听更新可用事件
+      window.electron.ipcRenderer.on('update-available', () => {
+        hasUpdateAvailable.value = true
+      })
+      
+      // 监听更新不可用事件
+      window.electron.ipcRenderer.on('update-not-available', () => {
+        hasUpdateAvailable.value = false
+      })
+      
+      // 监听更新下载进度
+      window.electron.ipcRenderer.on('update-download-progress', (event, progress) => {
+        updateProgress.value = Math.round(progress.percent || 0)
+        isUpdating.value = true
+        showUpdateIndicator.value = true
+      })
+      
+      // 监听更新下载完成
+      window.electron.ipcRenderer.on('update-downloaded', () => {
+        isUpdating.value = false
+        updateDownloaded.value = true
+        updateProgress.value = 100
+        showUpdateIndicator.value = true
+      })
     } else {
       error.value = 'IPC未加载，请刷新页面重试'
     }

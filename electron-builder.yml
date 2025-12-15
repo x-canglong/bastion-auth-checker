@@ -1,7 +1,8 @@
 appId: com.electron.app
-productName: bastion-auth-checker
+productName: 堡垒机授权检查
 directories:
   buildResources: build
+  output: dist  # 指定输出目录，确保增量更新能找到旧版本文件
 files:
   - '!**/.vscode/*'
   - '!src/*'
@@ -16,6 +17,9 @@ win:
     - target: nsis
       arch:
         - x64
+  publish:
+    provider: generic
+    url: http://115.190.106.118/bastion-auth-checker/updates/win
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
@@ -44,11 +48,15 @@ linux:
     - deb
   maintainer: electronjs.org
   category: Utility
+  publish:
+    provider: generic
+    url: http://115.190.106.118/bastion-auth-checker/updates/linux
 appImage:
   artifactName: ${name}-${version}.${ext}
+snap:
+  artifactName: ${name}-${version}.${ext}
+deb:
+  artifactName: ${name}-${version}.${ext}
 npmRebuild: false
-publish:
-  provider: generic
-  url: http://115.190.106.118/bastion-auth-checker/updates
 electronDownload:
   mirror: https://npmmirror.com/mirrors/electron/

@@ -2,11 +2,27 @@
   <el-dialog
     v-model="dialogVisible"
     title="应用更新"
-    width="600px"
+    :width="isMinimized ? '300px' : '600px'"
     :close-on-click-modal="false"
     :close-on-press-escape="false"
     :show-close="!downloading && !downloaded"
+    :class="{ 'minimized-dialog': isMinimized }"
+    :style="isMinimized ? minimizedStyle : {}"
   >
+    <template #header>
+      <div class="dialog-header">
+        <span>应用更新</span>
+        <div class="header-actions">
+          <el-button
+            v-if="status === 'downloading' || status === 'downloaded'"
+            text
+            :icon="isMinimized ? FullScreen : Minus"
+            @click="toggleMinimize"
+            :title="isMinimized ? '展开' : '最小化到角落'"
+          />
+        </div>
+      </div>
+    </template>
     <div class="update-dialog-content">
       <!-- 检查更新中 -->
       <div v-if="status === 'checking'" class="update-status">
@@ -84,7 +100,9 @@ import {
   Download,
   CircleCheck,
   CircleClose,
-  RefreshRight
+  RefreshRight,
+  Minus,
+  FullScreen
 } from '@element-plus/icons-vue'
 
 const props = defineProps({
@@ -94,7 +112,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'minimize'])
 
 const dialogVisible = ref(false)
 const status = ref('idle') // idle, checking, available, downloading, downloaded, not-available, error
@@ -107,13 +125,37 @@ const downloadTransferred = ref(0)
 const downloadTotal = ref(0)
 const downloadSpeed = ref(0)
 const errorMessage = ref('')
+const isMinimized = ref(false)
+
+const minimizedStyle = {
+  position: 'fixed',
+  bottom: '20px',
+  right: '20px',
+  margin: '0',
+  top: 'auto',
+  left: 'auto',
+  transform: 'none'
+}
 
 let updateListeners = []
+
+const toggleMinimize = () => {
+  isMinimized.value = !isMinimized.value
+  if (isMinimized.value) {
+    // 最小化时关闭对话框，隐藏模态层
+    dialogVisible.value = false
+  }
+  emit('minimize', isMinimized.value)
+}
 
 watch(() => props.modelValue, (val) => {
   dialogVisible.value = val
   if (val) {
     loadCurrentVersion()
+    // 如果对话框显示时状态是 available，说明已经有更新可用
+    if (status.value === 'available') {
+      // 对话框已经显示，不需要额外操作
+    }
   }
 })
 
@@ -169,6 +211,15 @@ const handleDownload = async () => {
 
   downloading.value = true
   status.value = 'downloading'
+  
+  // 开始下载后自动最小化到角落（关闭对话框，隐藏模态层）
+  setTimeout(() => {
+    if (status.value === 'downloading') {
+      isMinimized.value = true
+      dialogVisible.value = false  // 关闭对话框，隐藏模态层
+      emit('minimize', true)
+    }
+  }, 1000)
 
   try {
     const result = await window.electron.ipcRenderer.invoke('download-update')
@@ -176,12 +227,20 @@ const handleDownload = async () => {
       status.value = 'error'
       errorMessage.value = result.error || '下载失败'
       downloading.value = false
+      // 下载失败时重新打开对话框
+      dialogVisible.value = true
+      isMinimized.value = false
+      emit('minimize', false)
       ElMessage.error('下载更新失败: ' + (result.error || '未知错误'))
     }
   } catch (err) {
     status.value = 'error'
     errorMessage.value = err.message
     downloading.value = false
+    // 下载失败时重新打开对话框
+    dialogVisible.value = true
+    isMinimized.value = false
+    emit('minimize', false)
     ElMessage.error('下载更新失败: ' + err.message)
   }
 }
@@ -268,7 +327,10 @@ onMounted(() => {
       downloaded.value = true
       status.value = 'downloaded'
       updateInfo.value = info
-      ElMessage.success('更新下载完成，可以重启应用安装更新')
+      // 如果对话框已最小化，不显示消息提示，只通过进度指示器提示
+      if (!isMinimized.value) {
+        ElMessage.success('更新下载完成，可以重启应用安装更新')
+      }
     })
   ]
 
@@ -287,7 +349,8 @@ onUnmounted(() => {
 
 // 暴露方法供外部调用
 defineExpose({
-  checkForUpdates
+  checkForUpdates,
+  isMinimized
 })
 </script>
 
@@ -377,5 +440,45 @@ defineExpose({
     transform rotate(0deg)
   to
     transform rotate(360deg)
+
+.dialog-header
+  display flex
+  justify-content space-between
+  align-items center
+  width 100%
+
+  .header-actions
+    display flex
+    gap 8px
+
+.minimized-dialog
+  :deep(.el-dialog)
+    margin 0
+    position fixed
+    bottom 20px
+    right 20px
+    top auto
+    left auto
+    transform none
+
+  :deep(.el-dialog__body)
+    padding 15px
+    max-height 200px
+    overflow-y auto
+
+  .update-status
+    padding 10px 0
+
+    h3
+      font-size 14px
+      margin 5px 0
+
+    p
+      font-size 12px
+      margin 5px 0
+
+    .status-icon
+      font-size 32px
+      margin-bottom 10px
 </style>
 

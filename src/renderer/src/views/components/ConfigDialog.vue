@@ -141,66 +141,6 @@
           </div>
         </el-card>
 
-        <!-- 长时间权限配置 -->
-        <el-card class="config-section-card" shadow="hover">
-          <template #header>
-            <div class="section-header">
-              <el-icon class="section-icon"><Clock /></el-icon>
-              <span class="section-title">长时间权限判断</span>
-            </div>
-          </template>
-          <div class="section-content">
-            <p class="section-desc">非运维人员在生产环境的权限超过设定天数将被标记删除。与设定天数前的历史记录比较，只检查生产环境。</p>
-            <div class="long-time-config">
-              <el-input-number
-                v-model="localConfig.longTimeDays"
-                :min="1"
-                :max="365"
-                :precision="0"
-                size="large"
-                style="width: 200px"
-              />
-              <span class="unit-text">天</span>
-            </div>
-            <div class="config-preview">
-              <span class="preview-label">当前配置：</span>
-              <el-tag type="warning" size="small">
-                超过 {{ localConfig.longTimeDays || 30 }} 天的生产环境权限将被标记删除
-              </el-tag>
-            </div>
-          </div>
-        </el-card>
-
-        <!-- 历史文件数量限制配置 -->
-        <el-card class="config-section-card" shadow="hover">
-          <template #header>
-            <div class="section-header">
-              <el-icon class="section-icon"><Files /></el-icon>
-              <span class="section-title">历史文件数量限制</span>
-            </div>
-          </template>
-          <div class="section-content">
-            <p class="section-desc">历史文件目录中最多保存的Excel文件数量，超出将删除最早的文件。</p>
-            <div class="long-time-config">
-              <el-input-number
-                v-model="localConfig.maxHistoryFiles"
-                :min="10"
-                :max="200"
-                :precision="0"
-                size="large"
-                style="width: 200px"
-              />
-              <span class="unit-text">个</span>
-            </div>
-            <div class="config-preview">
-              <span class="preview-label">当前配置：</span>
-              <el-tag type="info" size="small">
-                最多保存 {{ localConfig.maxHistoryFiles || 50 }} 个历史文件
-              </el-tag>
-            </div>
-          </div>
-        </el-card>
-
         <!-- 主数据库IP配置 -->
         <el-card class="config-section-card" shadow="hover">
           <template #header>
@@ -260,6 +200,66 @@
                 </el-tag>
                 <el-tag v-else type="info" size="small">未配置</el-tag>
               </div>
+            </div>
+          </div>
+        </el-card>
+
+        <!-- 长时间权限配置 -->
+        <el-card class="config-section-card" shadow="hover">
+          <template #header>
+            <div class="section-header">
+              <el-icon class="section-icon"><Clock /></el-icon>
+              <span class="section-title">长时间权限判断</span>
+            </div>
+          </template>
+          <div class="section-content">
+            <p class="section-desc">非运维人员在生产环境的权限超过设定天数将被标记删除。与设定天数前的历史记录比较，只检查生产环境。</p>
+            <div class="long-time-config">
+              <el-input-number
+                v-model="localConfig.longTimeDays"
+                :min="1"
+                :max="365"
+                :precision="0"
+                size="large"
+                style="width: 200px"
+              />
+              <span class="unit-text">天</span>
+            </div>
+            <div class="config-preview">
+              <span class="preview-label">当前配置：</span>
+              <el-tag type="warning" size="small">
+                超过 {{ localConfig.longTimeDays || 30 }} 天的生产环境权限将被标记删除
+              </el-tag>
+            </div>
+          </div>
+        </el-card>
+
+        <!-- 历史文件数量限制配置 -->
+        <el-card class="config-section-card" shadow="hover">
+          <template #header>
+            <div class="section-header">
+              <el-icon class="section-icon"><Files /></el-icon>
+              <span class="section-title">历史文件数量限制</span>
+            </div>
+          </template>
+          <div class="section-content">
+            <p class="section-desc">历史文件目录中最多保存的Excel文件数量，超出将删除最早的文件。</p>
+            <div class="long-time-config">
+              <el-input-number
+                v-model="localConfig.maxHistoryFiles"
+                :min="10"
+                :max="200"
+                :precision="0"
+                size="large"
+                style="width: 200px"
+              />
+              <span class="unit-text">个</span>
+            </div>
+            <div class="config-preview">
+              <span class="preview-label">当前配置：</span>
+              <el-tag type="info" size="small">
+                最多保存 {{ localConfig.maxHistoryFiles || 50 }} 个历史文件
+              </el-tag>
             </div>
           </div>
         </el-card>
